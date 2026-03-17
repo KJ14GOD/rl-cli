@@ -1,10 +1,9 @@
 from pathlib import Path
 
 import typer
-from rich.panel import Panel
 
 from rlx.config import ConfigError, load_config
-from rlx.console import console
+from rlx.console import build_summary, console, print_panel
 from rlx.core.runs import RunPreparationError, prepare_run
 from rlx.rl import TrainingError, train_ppo
 
@@ -24,21 +23,33 @@ def train_command(
         console.print(f"[error]{exc}[/error]")
         raise typer.Exit(code=1) from exc
 
-    lines = [
-        [
-            f"[success]Completed run[/success] [path]{result.run_dir}[/path]",
-            f"[muted]Device[/muted] [value]{result.resolved_device}[/value]",
-            f"[muted]Timesteps[/muted] [value]{result.total_timesteps}[/value]",
-            f"[muted]Latest checkpoint[/muted] [path]{result.latest_checkpoint.relative_to(result.run_dir)}[/path]",
-            f"[muted]Metrics[/muted] [path]{result.metrics_path.relative_to(result.run_dir)}[/path]",
-        ]
-    ][0]
+    rows = [
+        ("[success]Completed run[/success]", f"[path]{result.run_dir}[/path]"),
+        ("[muted]Device[/muted]", f"[value]{result.resolved_device}[/value]"),
+        ("[muted]Timesteps[/muted]", f"[value]{result.total_timesteps}[/value]"),
+        (
+            "[muted]Latest checkpoint[/muted]",
+            f"[path]{result.latest_checkpoint.relative_to(result.run_dir)}[/path]",
+        ),
+        (
+            "[muted]Metrics[/muted]",
+            f"[path]{result.metrics_path.relative_to(result.run_dir)}[/path]",
+        ),
+    ]
     if result.best_checkpoint is not None:
-        lines.append(
-            f"[muted]Best checkpoint[/muted] [path]{result.best_checkpoint.relative_to(result.run_dir)}[/path]"
+        rows.append(
+            (
+                "[muted]Best checkpoint[/muted]",
+                f"[path]{result.best_checkpoint.relative_to(result.run_dir)}[/path]",
+            )
         )
     if result.eval_log is not None:
-        lines.append(f"[muted]Eval log[/muted] [path]{result.eval_log.relative_to(result.run_dir)}[/path]")
+        rows.append(
+            (
+                "[muted]Eval log[/muted]",
+                f"[path]{result.eval_log.relative_to(result.run_dir)}[/path]",
+            )
+        )
 
-    summary = "\n".join(lines)
-    console.print(Panel.fit(summary, title="RLCLI Training Complete", border_style="accent"))
+    summary = build_summary(rows)
+    print_panel("RLCLI Training Complete", summary)

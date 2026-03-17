@@ -1,9 +1,8 @@
 from pathlib import Path
 
 import typer
-from rich.panel import Panel
 
-from rlx.console import console
+from rlx.console import build_summary, console, print_panel
 from rlx.core.projects import ProjectInitError, init_project
 
 
@@ -18,13 +17,15 @@ def init_command(
         console.print(f"[error]{exc}[/error]")
         raise typer.Exit(code=1) from exc
 
-    summary = "\n".join(
+    summary = build_summary(
         [
-            f"[success]Created[/success] [path]{result.project_root}[/path]",
-            f"[muted]Starter config[/muted] [path]{result.starter_config.relative_to(result.project_root)}[/path]",
-            f"[muted]Directories[/muted] [value]{len(result.created_dirs)}[/value]",
-            f"[muted]Next[/muted] cd {result.project_root.name}",
+            ("[success]Created[/success]", f"[path]{result.project_root}[/path]"),
+            (
+                "[muted]Starter config[/muted]",
+                f"[path]{result.starter_config.relative_to(result.project_root)}[/path]",
+            ),
+            ("[muted]Directories[/muted]", f"[value]{len(result.created_dirs)}[/value]"),
+            ("[muted]Next[/muted]", f"[value]cd {result.project_root.name}[/value]"),
         ]
     )
-    console.print(Panel.fit(summary, title="RLCLI Project Initialized", border_style="accent"))
-
+    print_panel("RLCLI Project Initialized", summary)

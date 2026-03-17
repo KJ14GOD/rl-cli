@@ -6,7 +6,6 @@ from typer.testing import CliRunner
 
 from rlx.cli import app
 
-
 runner = CliRunner()
 
 
@@ -67,6 +66,23 @@ def test_train_runs_tiny_cartpole_job() -> None:
         assert (run_dir / "metrics.jsonl").read_text(encoding="utf-8").strip() != ""
         assert (run_dir / "checkpoints/latest.zip").exists()
 
+        eval_result = runner.invoke(app, ["eval", str(run_dir / "checkpoints/latest.zip")])
+
+        assert eval_result.exit_code == 0
+        assert "RLCLI Evaluation Complete" in eval_result.stdout
+        assert (run_dir / "eval/manual_eval_001.json").exists()
+
+        video_result = runner.invoke(
+            app,
+            ["video", str(run_dir / "checkpoints/latest.zip"), "--episodes", "1"],
+        )
+
+        assert video_result.exit_code == 0
+        assert "RLCLI Video Rendered" in video_result.stdout
+        assert (run_dir / "videos/manual_video_001/manifest.json").exists()
+
         metadata = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
         assert metadata["status"] == "completed"
         assert metadata["resolved_device"] == "cpu"
+        assert metadata["last_eval_result"] == "eval/manual_eval_001.json"
+        assert metadata["last_video_manifest"] == "videos/manual_video_001/manifest.json"
