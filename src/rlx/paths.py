@@ -13,4 +13,14 @@ PROJECT_DIRS = (
 )
 
 STARTER_CONFIG = Path("configs/ppo_cartpole.yaml")
-
+RUNS_DIR = Path("runs")
+RUN_ARTIFACT_DIRS = (
+    "checkpoints",
+    "eval",
+    "videos",
+    "plots",
+    "logs",
+)
+CONFIG_SNAPSHOT_NAME = "config_snapshot.yaml"
+METADATA_NAME = "metadata.json"
+METRICS_NAME = "metrics.jsonl"

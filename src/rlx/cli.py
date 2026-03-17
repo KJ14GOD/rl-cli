@@ -2,6 +2,7 @@ import typer
 from rich.traceback import install as install_rich_traceback
 
 from rlx.commands.init import init_command
+from rlx.commands.train import train_command
 
 
 install_rich_traceback(show_locals=False)
@@ -22,3 +23,4 @@ def main() -> None:
 
 
 app.command("init")(init_command)
+app.command("train")(train_command)

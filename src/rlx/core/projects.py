@@ -9,6 +9,10 @@ class ProjectInitError(Exception):
     """Raised when a project scaffold cannot be created."""
 
 
+class ProjectLookupError(Exception):
+    """Raised when an RLCLI project root cannot be located."""
+
+
 @dataclass(frozen=True)
 class ProjectInitResult:
     project_root: Path
@@ -41,3 +45,19 @@ def init_project(project_root: Path) -> ProjectInitResult:
         starter_config=starter_config,
     )
 
+
+def find_project_root(path: Path) -> Path:
+    """Locate the nearest ancestor that matches the standard RLCLI project layout."""
+
+    candidate = path.resolve()
+    if candidate.is_file():
+        candidate = candidate.parent
+
+    for current in (candidate, *candidate.parents):
+        if all((current / dirname).is_dir() for dirname in PROJECT_DIRS):
+            return current
+
+    raise ProjectLookupError(
+        "No RLCLI project root found. Run this command inside an initialized project or use "
+        "`rlx init` first."
+    )
