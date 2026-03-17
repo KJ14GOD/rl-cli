@@ -36,9 +36,11 @@ def test_compare_summarizes_runs_and_config_differences() -> None:
         result = runner.invoke(app, ["compare", "tiny_a_001", "tiny_b_001"])
 
         assert result.exit_code == 0
+        assert "RLCLI Compare Highlights" in result.stdout
         assert "RLCLI Run Comparison" in result.stdout
         assert "RLCLI Run Artifacts" in result.stdout
         assert "RLCLI Config Differences" in result.stdout
+        assert "Best Eval" in result.stdout
         assert "tiny_a_001" in result.stdout
         assert "tiny_b_001" in result.stdout
         assert "algo.learning_rate" in result.stdout

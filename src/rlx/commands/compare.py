@@ -19,13 +19,37 @@ def compare_command(run_refs: list[str] = RUN_REFS_ARGUMENT) -> None:
         console.print(f"[error]{exc}[/error]")
         raise typer.Exit(code=1) from exc
 
+    best_final_reward = _max_metric([run.final_rollout_reward for run in runs])
+    best_eval_reward = _max_metric(
+        [run.best_eval.mean_reward if run.best_eval is not None else None for run in runs]
+    )
+
+    highlight_summary = build_summary(
+        [
+            ("[muted]Runs[/muted]", f"[value]{len(runs)}[/value]"),
+            (
+                "[success]Best final train[/success]",
+                _leader_text(runs, "final_rollout_reward", best_final_reward),
+            ),
+            (
+                "[success]Best eval mean[/success]",
+                _leader_text(
+                    runs,
+                    "best_eval.mean_reward",
+                    best_eval_reward,
+                    include_eval_source=True,
+                ),
+            ),
+        ]
+    )
+
     summary_table = Table(expand=True, padding=(0, 1))
     summary_table.add_column("Run", style="accent", no_wrap=True)
     summary_table.add_column("Status", no_wrap=True)
     summary_table.add_column("Env", no_wrap=True)
     summary_table.add_column("Device", no_wrap=True)
-    summary_table.add_column("Final Reward", justify="right", no_wrap=True)
-    summary_table.add_column("Best Eval", justify="right", no_wrap=True)
+    summary_table.add_column("Final Train", justify="right", no_wrap=True)
+    summary_table.add_column("Best Eval Mean", justify="right", no_wrap=True)
     summary_table.add_column("Timesteps", justify="right", no_wrap=True)
 
     for run in runs:
@@ -34,8 +58,11 @@ def compare_command(run_refs: list[str] = RUN_REFS_ARGUMENT) -> None:
             _style_status(run.status),
             run.environment or "[muted]—[/muted]",
             _display_device(run),
-            _fmt_number(run.final_rollout_reward),
-            _fmt_number(run.best_eval.mean_reward if run.best_eval is not None else None),
+            _fmt_number(run.final_rollout_reward, best=best_final_reward),
+            _fmt_number(
+                run.best_eval.mean_reward if run.best_eval is not None else None,
+                best=best_eval_reward,
+            ),
             _fmt_int(run.total_timesteps),
         )
 
@@ -43,7 +70,8 @@ def compare_command(run_refs: list[str] = RUN_REFS_ARGUMENT) -> None:
     artifact_table.add_column("Run", style="accent", no_wrap=True)
     artifact_table.add_column("Best Ckpt", overflow="fold")
     artifact_table.add_column("Latest Ckpt", overflow="fold")
-    artifact_table.add_column("Last Eval", overflow="fold")
+    artifact_table.add_column("Latest Eval", overflow="fold")
+    artifact_table.add_column("Best Eval Src", overflow="fold")
     artifact_table.add_column("Video", overflow="fold")
 
     for run in runs:
@@ -51,10 +79,12 @@ def compare_command(run_refs: list[str] = RUN_REFS_ARGUMENT) -> None:
             run.run_id,
             _fmt_path(run.best_checkpoint),
             _fmt_path(run.latest_checkpoint),
-            _fmt_eval_source(run.latest_eval),
+            _fmt_eval_source(run.latest_eval, label="latest"),
+            _fmt_eval_source(run.best_eval, label="best"),
             _fmt_path(run.last_video_manifest),
         )
 
+    print_panel("RLCLI Compare Highlights", highlight_summary)
     print_panel("RLCLI Run Comparison", summary_table)
     print_panel("RLCLI Run Artifacts", artifact_table)
 
@@ -70,12 +100,14 @@ def compare_command(run_refs: list[str] = RUN_REFS_ARGUMENT) -> None:
 
         print_panel("RLCLI Config Differences", diff_table)
     else:
-        summary = build_summary([
-            (
-                "[success]Configs[/success]",
-                "[value]No config differences across compared runs.[/value]",
-            )
-        ])
+        summary = build_summary(
+            [
+                (
+                    "[success]Configs[/success]",
+                    "[value]No config differences across compared runs.[/value]",
+                )
+            ]
+        )
         print_panel("RLCLI Config Differences", summary)
 
 
@@ -87,9 +119,11 @@ def _display_device(run) -> str:
     return "[muted]—[/muted]"
 
 
-def _fmt_number(value: float | None) -> str:
+def _fmt_number(value: float | None, *, best: float | None = None) -> str:
     if value is None:
         return "[muted]—[/muted]"
+    if best is not None and value == best:
+        return f"[success]{value:.2f}[/success]"
     return f"[value]{value:.2f}[/value]"
 
 
@@ -105,12 +139,15 @@ def _fmt_path(value: str | None) -> str:
     return f"[path]{value}[/path]"
 
 
-def _fmt_eval_source(value) -> str:
+def _fmt_eval_source(value, *, label: str) -> str:
     if value is None:
         return "[muted]—[/muted]"
     if value.mean_reward is None:
         return f"[path]{value.source}[/path]"
-    return f"[path]{value.source}[/path] [muted]({value.mean_reward:.2f})[/muted]"
+    return (
+        f"[path]{value.source}[/path] "
+        f"[muted]({label}: {value.mean_reward:.2f})[/muted]"
+    )
 
 
 def _style_status(status: str | None) -> str:
@@ -121,3 +158,41 @@ def _style_status(status: str | None) -> str:
     if status:
         return f"[value]{status}[/value]"
     return "[muted]—[/muted]"
+
+
+def _max_metric(values: list[float | None]) -> float | None:
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    return max(present)
+
+
+def _leader_text(
+    runs,
+    attribute_path: str,
+    best_value: float | None,
+    *,
+    include_eval_source: bool = False,
+) -> str:
+    if best_value is None:
+        return "[muted]—[/muted]"
+
+    leaders = []
+    for run in runs:
+        value = _nested_attr(run, attribute_path)
+        if value == best_value:
+            label = f"[success]{run.run_id}[/success] [muted]({best_value:.2f})[/muted]"
+            if include_eval_source and run.best_eval is not None:
+                label += f" [path]{run.best_eval.source}[/path]"
+            leaders.append(label)
+
+    return ", ".join(leaders) if leaders else "[muted]—[/muted]"
+
+
+def _nested_attr(obj, path: str):
+    current = obj
+    for part in path.split("."):
+        current = getattr(current, part, None)
+        if current is None:
+            return None
+    return current
