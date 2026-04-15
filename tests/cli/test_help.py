@@ -13,8 +13,12 @@ def test_help_shows_root_command() -> None:
     assert "--style" in result.stdout
     assert "compare" in result.stdout
     assert "eval" in result.stdout
+    assert "info" in result.stdout
     assert "init" in result.stdout
+    assert "ls" in result.stdout
+    assert "plot" in result.stdout
     assert "styles" in result.stdout
+    assert "tag" in result.stdout
     assert "train" in result.stdout
     assert "video" in result.stdout
 

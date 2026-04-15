@@ -26,6 +26,7 @@ class RunComparison:
     run_dir: Path
     run_id: str
     run_name: str | None
+    tags: tuple[str, ...]
     status: str | None
     environment: str | None
     requested_device: str | None
@@ -83,6 +84,7 @@ def load_run_comparison(run_dir: Path) -> RunComparison:
         run_dir=run_dir,
         run_id=metadata.get("run_id", run_dir.name),
         run_name=metadata.get("run_name"),
+        tags=_read_tags(metadata.get("tags")),
         status=metadata.get("status"),
         environment=metadata.get("environment"),
         requested_device=metadata.get("device"),
@@ -282,3 +284,15 @@ def _maybe_int(value: Any) -> int | None:
     if isinstance(value, int):
         return value
     return None
+
+
+def _read_tags(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    tags = []
+    for item in value:
+        if isinstance(item, str):
+            stripped = item.strip()
+            if stripped:
+                tags.append(stripped)
+    return tuple(tags)
