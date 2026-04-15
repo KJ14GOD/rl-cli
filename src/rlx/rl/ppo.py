@@ -4,7 +4,7 @@ import os
 import shutil
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -32,8 +32,15 @@ class TrainResult:
     eval_log: Path | None
 
 
-def train_ppo(config: ExperimentConfig, run: RunPreparationResult) -> TrainResult:
-    """Train a PPO agent with Stable-Baselines3 inside the prepared run scaffold."""
+def train_ppo(
+    config: ExperimentConfig,
+    run: RunPreparationResult,
+    *,
+    resume_checkpoint: Path | None = None,
+    additional_timesteps: int | None = None,
+    lineage_metadata: dict[str, Any] | None = None,
+) -> TrainResult:
+    """Train or resume a PPO agent inside the prepared run scaffold."""
 
     _prepare_matplotlib_cache()
 
@@ -48,7 +55,8 @@ def train_ppo(config: ExperimentConfig, run: RunPreparationResult) -> TrainResul
         from stable_baselines3.common.env_util import make_vec_env
     except ImportError as exc:  # pragma: no cover - depends on local environment
         raise TrainingError(
-            "Stable-Baselines3 is not installed. Install RL dependencies before running `rlx train`."
+            "Stable-Baselines3 is not installed. Install RL dependencies before running "
+            "`rlx train`."
         ) from exc
 
     try:
@@ -56,13 +64,15 @@ def train_ppo(config: ExperimentConfig, run: RunPreparationResult) -> TrainResul
         resolved_device = resolve_device(config.device)
     except (EnvironmentError, DeviceResolutionError) as exc:
         raise TrainingError(str(exc)) from exc
-    update_metadata(
-        run.metadata_path,
-        status="running",
-        started_at=_utc_now_iso(),
-        requested_device=config.device,
-        resolved_device=resolved_device,
-    )
+    metadata_updates: dict[str, Any] = {
+        "status": "running",
+        "started_at": _utc_now_iso(),
+        "requested_device": config.device,
+        "resolved_device": resolved_device,
+    }
+    if lineage_metadata:
+        metadata_updates.update(lineage_metadata)
+    update_metadata(run.metadata_path, **metadata_updates)
 
     checkpoints_dir = run.run_dir / "checkpoints"
     eval_dir = run.run_dir / "eval"
@@ -83,7 +93,7 @@ def train_ppo(config: ExperimentConfig, run: RunPreparationResult) -> TrainResul
             self._writer.write(
                 {
                     "event": "training_start",
-                    "step": 0,
+                    "step": int(self.model.num_timesteps),
                     "total_timesteps": self._total_timesteps,
                 }
             )
@@ -125,30 +135,45 @@ def train_ppo(config: ExperimentConfig, run: RunPreparationResult) -> TrainResul
     env = None
     eval_env = None
     metrics_callback: MetricsCallback | None = None
+    learn_timesteps = additional_timesteps or config.algo.total_timesteps
     try:
         env = make_vec_env(config.env.id, n_envs=config.env.num_envs, seed=config.seed)
         eval_env = make_vec_env(config.env.id, n_envs=1, seed=config.seed + 10_000)
 
-        policy_kwargs = {"net_arch": list(config.policy.hidden_sizes)}
-        model = PPO(
-            "MlpPolicy",
-            env,
-            n_steps=config.algo.rollout_steps,
-            batch_size=config.algo.batch_size,
-            learning_rate=config.algo.learning_rate,
-            gamma=config.algo.gamma,
-            gae_lambda=config.algo.gae_lambda,
-            clip_range=config.algo.clip_range,
-            ent_coef=config.algo.entropy_coef,
-            vf_coef=config.algo.value_coef,
-            n_epochs=config.algo.update_epochs,
-            policy_kwargs=policy_kwargs,
-            seed=config.seed,
-            device=resolved_device,
-            verbose=0,
-        )
+        if resume_checkpoint is None:
+            policy_kwargs = {"net_arch": list(config.policy.hidden_sizes)}
+            model = PPO(
+                "MlpPolicy",
+                env,
+                n_steps=config.algo.rollout_steps,
+                batch_size=config.algo.batch_size,
+                learning_rate=config.algo.learning_rate,
+                gamma=config.algo.gamma,
+                gae_lambda=config.algo.gae_lambda,
+                clip_range=config.algo.clip_range,
+                ent_coef=config.algo.entropy_coef,
+                vf_coef=config.algo.value_coef,
+                n_epochs=config.algo.update_epochs,
+                policy_kwargs=policy_kwargs,
+                seed=config.seed,
+                device=resolved_device,
+                verbose=0,
+            )
+        else:
+            resolved_resume_checkpoint = resume_checkpoint.expanduser().resolve()
+            if not resolved_resume_checkpoint.exists():
+                raise TrainingError(f"Resume checkpoint not found: {resolved_resume_checkpoint}")
+            if not resolved_resume_checkpoint.is_file():
+                raise TrainingError(
+                    f"Resume checkpoint path is not a file: {resolved_resume_checkpoint}"
+                )
+            model = PPO.load(str(resolved_resume_checkpoint), device=resolved_device)
+            model.set_env(env)
 
-        metrics_callback = MetricsCallback(run.metrics_path, config.algo.total_timesteps)
+        metrics_callback = MetricsCallback(
+            run.metrics_path,
+            int(model.num_timesteps + learn_timesteps),
+        )
 
         callbacks = CallbackList(
             [
@@ -174,10 +199,11 @@ def train_ppo(config: ExperimentConfig, run: RunPreparationResult) -> TrainResul
         )
 
         model.learn(
-            total_timesteps=config.algo.total_timesteps,
+            total_timesteps=learn_timesteps,
             callback=callbacks,
             log_interval=1,
             progress_bar=False,
+            reset_num_timesteps=resume_checkpoint is None,
         )
         model.save(str(latest_checkpoint))
 
@@ -235,14 +261,14 @@ def train_ppo(config: ExperimentConfig, run: RunPreparationResult) -> TrainResul
 
 
 def _to_scalar(value: Any) -> int | float | bool | str | None:
-    if isinstance(value, (bool, int, float, str)):
+    if isinstance(value, bool | int | float | str):
         return value
     if hasattr(value, "item"):
         try:
             extracted = value.item()
         except Exception:
             return None
-        if isinstance(extracted, (bool, int, float, str)):
+        if isinstance(extracted, bool | int | float | str):
             return extracted
     return None
 
@@ -256,4 +282,4 @@ def _prepare_matplotlib_cache() -> None:
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")

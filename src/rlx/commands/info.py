@@ -30,6 +30,9 @@ def _build_overview(info: RunInfo):
         ("[muted]Run id[/muted]", f"[value]{info.run.run_id}[/value]"),
         ("[muted]Run name[/muted]", _fmt_text(info.run.run_name)),
         ("[muted]Tags[/muted]", _fmt_tags(info.run.tags)),
+        ("[muted]Resumed from[/muted]", _fmt_text(info.resumed_from_run)),
+        ("[muted]Sweep[/muted]", _fmt_text(info.sweep_name)),
+        ("[muted]Variant[/muted]", _fmt_optional_int(info.sweep_variant_index)),
         ("[muted]Status[/muted]", _fmt_status(info.run.status)),
         ("[muted]Environment[/muted]", _fmt_text(info.run.environment)),
         ("[muted]Device[/muted]", _fmt_device(info)),
@@ -72,6 +75,7 @@ def _build_artifacts(info: RunInfo):
         ("[muted]Metrics[/muted]", f"[path]{info.metrics_file}[/path]"),
         ("[muted]Latest ckpt[/muted]", _fmt_path(info.run.latest_checkpoint)),
         ("[muted]Best ckpt[/muted]", _fmt_path(info.run.best_checkpoint)),
+        ("[muted]Resume ckpt[/muted]", _fmt_path(info.resumed_from_checkpoint)),
         ("[muted]Latest eval[/muted]", _fmt_path(info.last_eval_result)),
         ("[muted]Eval log[/muted]", _fmt_path(info.eval_log)),
         ("[muted]Latest video[/muted]", _fmt_path(info.last_video_manifest)),
@@ -119,6 +123,12 @@ def _fmt_number(value: float | None) -> str:
 
 
 def _fmt_int(value: int | None) -> str:
+    if value is None:
+        return "[muted]—[/muted]"
+    return f"[value]{value}[/value]"
+
+
+def _fmt_optional_int(value: int | None) -> str:
     if value is None:
         return "[muted]—[/muted]"
     return f"[value]{value}[/value]"

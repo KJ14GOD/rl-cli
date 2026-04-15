@@ -25,6 +25,10 @@ class RunInfo:
     failed_at: str | None
     interrupted_at: str | None
     error: str | None
+    resumed_from_run: str | None
+    resumed_from_checkpoint: str | None
+    sweep_name: str | None
+    sweep_variant_index: int | None
     last_eval_at: str | None
     last_eval_result: str | None
     last_eval_checkpoint: str | None
@@ -64,6 +68,10 @@ def load_run_info(run_ref: str, cwd: Path | None = None) -> RunInfo:
         failed_at=_maybe_str(metadata.get("failed_at")),
         interrupted_at=_maybe_str(metadata.get("interrupted_at")),
         error=_maybe_str(metadata.get("error")),
+        resumed_from_run=_maybe_str(metadata.get("resumed_from_run")),
+        resumed_from_checkpoint=_maybe_str(metadata.get("resumed_from_checkpoint")),
+        sweep_name=_maybe_str(metadata.get("sweep_name")),
+        sweep_variant_index=_maybe_int(metadata.get("sweep_variant_index")),
         last_eval_at=_maybe_str(metadata.get("last_eval_at")),
         last_eval_result=_maybe_str(metadata.get("last_eval_result")),
         last_eval_checkpoint=_maybe_str(metadata.get("last_eval_checkpoint")),
@@ -117,5 +125,11 @@ def _build_config_summary(run: RunComparison) -> tuple[tuple[str, str], ...]:
 
 def _maybe_str(value: Any) -> str | None:
     if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _maybe_int(value: Any) -> int | None:
+    if isinstance(value, int):
         return value
     return None

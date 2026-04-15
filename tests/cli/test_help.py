@@ -11,13 +11,17 @@ def test_help_shows_root_command() -> None:
     assert result.exit_code == 0
     assert "Local-first CLI for reinforcement learning experiments." in result.stdout
     assert "--style" in result.stdout
+    assert "analyze" in result.stdout
     assert "compare" in result.stdout
     assert "eval" in result.stdout
+    assert "explain-metrics" in result.stdout
     assert "info" in result.stdout
     assert "init" in result.stdout
     assert "ls" in result.stdout
     assert "plot" in result.stdout
+    assert "resume" in result.stdout
     assert "styles" in result.stdout
+    assert "sweep" in result.stdout
     assert "tag" in result.stdout
     assert "train" in result.stdout
     assert "video" in result.stdout
