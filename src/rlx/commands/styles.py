@@ -5,7 +5,14 @@ from rlx.settings import load_settings
 
 
 def styles_command() -> None:
-    """Show the built-in RLCLI output styles."""
+    """Show the built-in RLCLI output styles.
+
+    Examples:
+
+        rlx styles
+        rlx --style minimal
+        rlx --style forest
+    """
 
     saved_style = load_settings().style
 

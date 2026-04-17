@@ -11,7 +11,13 @@ RUN_REFS_ARGUMENT = typer.Argument(
 
 
 def compare_command(run_refs: list[str] = RUN_REFS_ARGUMENT) -> None:
-    """Compare one or more RLCLI runs using tracked artifacts."""
+    """Compare multiple runs side-by-side.
+
+    Examples:
+
+        rlx compare cartpole_ppo_001 cartpole_ppo_002
+        rlx compare runs/cartpole_ppo_001 runs/cartpole_ppo_002 runs/cartpole_ppo_003
+    """
 
     try:
         runs = load_comparisons(run_refs)

@@ -9,7 +9,13 @@ from rlx.core.projects import ProjectInitError, init_project
 def init_command(
     project_name: str = typer.Argument(..., help="Name of the new RL project directory."),
 ) -> None:
-    """Create a new RLCLI project scaffold."""
+    """Create a new RLCLI project scaffold.
+
+    Examples:
+
+        rlx init bossfight
+        rlx init experiments/cartpole_lab
+    """
 
     try:
         result = init_project(Path(project_name))

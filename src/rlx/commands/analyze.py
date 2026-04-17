@@ -11,7 +11,13 @@ RUN_REF_ARGUMENT = typer.Argument(
 
 
 def analyze_command(run_ref: str = RUN_REF_ARGUMENT) -> None:
-    """Analyze one run using its local artifacts."""
+    """Interpret one run across metrics, evals, and artifacts.
+
+    Examples:
+
+        rlx analyze cartpole_ppo_001
+        rlx analyze runs/cartpole_ppo_001
+    """
 
     try:
         analysis = analyze_run(run_ref)

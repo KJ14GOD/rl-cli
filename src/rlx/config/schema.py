@@ -1,7 +1,12 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
-
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+)
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 PositiveInt = Annotated[int, Field(gt=0)]
@@ -65,4 +70,3 @@ class ExperimentConfig(RLXModel):
     policy: PolicyConfig
     checkpoint: CheckpointConfig
     eval: EvalConfig
-

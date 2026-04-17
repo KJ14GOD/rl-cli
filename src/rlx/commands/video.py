@@ -24,7 +24,13 @@ def video_command(
     episodes: int = EPISODES_OPTION,
     device: str | None = DEVICE_OPTION,
 ) -> None:
-    """Render one or more episodes from a saved PPO checkpoint."""
+    """Render GIF episodes from a saved PPO checkpoint.
+
+    Examples:
+
+        rlx video runs/cartpole_ppo_001/checkpoints/best.zip
+        rlx video runs/cartpole_ppo_001/checkpoints/latest.zip --episodes 3
+    """
 
     try:
         result = render_checkpoint_video(Path(checkpoint_path), episodes=episodes, device=device)

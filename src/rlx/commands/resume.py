@@ -30,7 +30,14 @@ def resume_command(
     checkpoint: str = CHECKPOINT_OPTION,
     timesteps: int | None = TIMESTEPS_OPTION,
 ) -> None:
-    """Resume training from a prior checkpoint into a new tracked run."""
+    """Resume training from a prior checkpoint into a new tracked run.
+
+    Examples:
+
+        rlx resume cartpole_ppo_001
+        rlx resume cartpole_ppo_001 --checkpoint best --timesteps 50000
+        rlx resume cartpole_ppo_001 --checkpoint step_10000.zip
+    """
 
     try:
         source_run_dir = resolve_run_ref(run_ref, Path.cwd().resolve())

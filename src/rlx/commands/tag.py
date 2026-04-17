@@ -17,7 +17,13 @@ def tag_command(
     run_ref: str = RUN_REF_ARGUMENT,
     tags: list[str] = TAGS_ARGUMENT,
 ) -> None:
-    """Attach one or more labels to a run."""
+    """Attach one or more labels to a run.
+
+    Examples:
+
+        rlx tag cartpole_ppo_001 baseline
+        rlx tag cartpole_ppo_002 sweep-best promising
+    """
 
     try:
         result = add_tags(run_ref, tags)

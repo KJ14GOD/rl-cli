@@ -6,7 +6,6 @@ from typer.testing import CliRunner
 from rlx.cli import app
 from rlx.paths import CONFIG_SNAPSHOT_NAME, METADATA_NAME, METRICS_NAME, RUN_ARTIFACT_DIRS
 
-
 runner = CliRunner()
 
 

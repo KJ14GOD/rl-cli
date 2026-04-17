@@ -41,7 +41,14 @@ def eval_command(
     episodes: int | None = EPISODES_OPTION,
     device: str | None = DEVICE_OPTION,
 ) -> None:
-    """Evaluate a saved PPO checkpoint using the run's snapped config."""
+    """Evaluate one or more saved PPO checkpoints.
+
+    Examples:
+
+        rlx eval runs/cartpole_ppo_001/checkpoints/latest.zip
+        rlx eval --run runs/cartpole_ppo_001
+        rlx eval --run runs/cartpole_ppo_001 --all-checkpoints --episodes 10
+    """
 
     try:
         results = evaluate_checkpoints(

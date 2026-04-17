@@ -1,71 +1,103 @@
 # RLCLI
 
-RLCLI is a local-first command line toolkit for managing reinforcement learning experiments end to end. The goal is to make RL workflows structured, reproducible, and easy to iterate on by standardizing how projects are initialized, trained, evaluated, visualized, compared, and later analyzed with RL-aware tooling.
+RLCLI is a local-first command line toolkit for reinforcement learning experiments. It gives you one repeatable workflow for project setup, PPO training, evaluation, video rendering, comparison, plotting, sweeps, and artifact-grounded analysis.
 
-> [!IMPORTANT]
-> RLCLI is in active development. This repository is currently a project definition and roadmap for the intended system. The commands, layouts, and workflows below describe what RLCLI is meant to provide, not a released implementation.
-
-## Why RLCLI Exists
-
-Reinforcement learning projects tend to get messy fast. A typical setup ends up with scattered training scripts, inconsistent checkpoint folders, ad hoc evaluation code, and little discipline around what changed between runs.
-
-That makes basic questions harder than they should be:
-
-- Which config produced the best result?
-- Where is the best checkpoint?
-- Did the latest run actually improve, or did it just get lucky?
-- What changed between two runs?
-- Did training plateau, collapse, or become unstable?
-
-RL libraries solve algorithm implementation. RLCLI is meant to solve the experiment workflow around those algorithms.
-
-## Core Workflow
-
-RLCLI is built around one loop:
-
-`config -> train -> evaluate -> visualize -> compare -> analyze -> iterate`
-
-The intent is to make every experiment follow the same structure:
-
-- configs define the run
-- training produces checkpoints and metrics
-- evaluation measures policy quality consistently
-- visualization makes learning behavior easier to inspect
-- comparison makes run-to-run differences obvious
-- later analysis tools help interpret outcomes and suggest next steps
-
-## Phase 1: MVP
-
-The first release is intentionally narrow. It should establish a clean, useful baseline before expanding into sweeps and AI-assisted features.
-
-Planned commands:
+The installed command is:
 
 ```bash
-rlx init <project_name>
-rlx train <config_path>
-rlx eval <checkpoint_path>
-rlx video <checkpoint_path>
-rlx compare <run_a> <run_b> [run_c ...]
+rlx
 ```
 
-Initial scope:
+RLCLI is intentionally narrow today:
 
-- PPO as the first supported algorithm
+- PPO via Stable-Baselines3
 - Gymnasium-compatible environments
-- YAML configs as the primary interface
-- run folders for every training execution
-- metrics logging and checkpointing
-- deterministic evaluation
-- video rendering and text-based run comparison
+- YAML configs as the main interface
+- local run folders for all artifacts
+- deterministic, rules-based analysis commands
 
-## Intended Project Layout
+RLCLI works out of the box with Gymnasium Classic Control env ids such as `CartPole-v1`, `Acrobot-v1`, `MountainCar-v0`, `MountainCarContinuous-v0`, and `Pendulum-v1`.
 
-Running the planned `rlx init bossfight` command should create a standardized layout like this:
+## Install
+
+For development from this repo:
+
+```bash
+cd /Users/kj16/Desktop/RL-CLI
+source .venv/bin/activate
+python -m pip install -e .
+```
+
+For users after a PyPI release:
+
+```bash
+pipx install rlx-workbench
+```
+
+Then:
+
+```bash
+rlx --help
+```
+
+## Quickstart
+
+Create a project:
+
+```bash
+rlx init bossfight
+cd bossfight
+```
+
+Train the starter CartPole PPO config:
+
+```bash
+rlx train configs/ppo_cartpole.yaml
+```
+
+Inspect what was created:
+
+```bash
+rlx ls
+rlx info cartpole_ppo_001
+```
+
+Evaluate and render the trained checkpoint:
+
+```bash
+rlx eval --run runs/cartpole_ppo_001
+rlx video runs/cartpole_ppo_001/checkpoints/best.zip --episodes 2
+```
+
+Plot and analyze the run:
+
+```bash
+rlx plot cartpole_ppo_001
+rlx analyze cartpole_ppo_001
+rlx explain-metrics cartpole_ppo_001
+rlx diagnose cartpole_ppo_001
+rlx suggest cartpole_ppo_001
+```
+
+Compare multiple runs:
+
+```bash
+rlx compare cartpole_ppo_001 cartpole_ppo_002
+```
+
+## Project Layout
+
+`rlx init bossfight` creates:
 
 ```text
 bossfight/
-  envs/
   configs/
+    ppo_acrobot.yaml
+    ppo_cartpole.yaml
+    ppo_mountain_car.yaml
+    ppo_mountain_car_continuous.yaml
+    ppo_pendulum.yaml
+  envs/
   policies/
   runs/
   videos/
@@ -74,156 +106,226 @@ bossfight/
   analysis/
 ```
 
-The point of this layout is consistency. RL projects should not depend on whatever folder structure happened to emerge over time.
+The default starter config is the main editable entrypoint. You change training behavior by editing YAML values such as seed, device, environment id, timesteps, learning rate, rollout steps, checkpoint cadence, and eval cadence.
 
-## Run-Based Storage Model
+The scaffold includes one ready-to-run PPO config per Gymnasium Classic Control environment:
 
-Every training execution should create a new run folder with the important artifacts stored together:
+```bash
+rlx train configs/ppo_cartpole.yaml
+rlx train configs/ppo_acrobot.yaml
+rlx train configs/ppo_mountain_car.yaml
+rlx train configs/ppo_mountain_car_continuous.yaml
+rlx train configs/ppo_pendulum.yaml
+```
+
+All of these use built-in Gymnasium ids directly. No custom env registration is required.
+
+## Run Storage
+
+Every successful `rlx train` creates a new run folder:
 
 ```text
 runs/
-  bossfight_001/
+  cartpole_ppo_001/
     config_snapshot.yaml
     metadata.json
     metrics.jsonl
     checkpoints/
-      best.pt
-      latest.pt
-      step_50000.pt
+      latest.zip
+      best.zip
+      step_*.zip
     eval/
+      evaluations.npz
+      manual_eval_*.json
     videos/
+      manual_video_*/
     plots/
+      manual_plot_*/
     logs/
 ```
 
-Each run is intended to preserve:
+Important files:
 
-- the exact config used
-- seed and device
-- environment name
-- git commit when available
-- metrics over time
-- evaluation results
-- artifacts such as checkpoints, videos, and plots
+- `config_snapshot.yaml`: exact config used for that run
+- `metadata.json`: run status, timestamps, device, env, artifact paths, tags, sweep/resume lineage
+- `metrics.jsonl`: append-only training metrics
+- `checkpoints/`: saved PPO models
+- `eval/`: training-time eval and standalone eval JSON files
+- `videos/`: rendered GIF bundles
+- `plots/`: generated plot bundles
 
-This run-based model is the foundation for reproducibility, comparison, and every later analysis feature.
+## Command Taxonomy
 
-## Config-Driven Training
+### Core Workflow
 
-YAML configs are intended to be the main interface for training. A config should fully describe the environment, algorithm settings, policy shape, checkpointing, and evaluation behavior.
+Use these to create and run experiments:
 
-Example PPO config:
+```bash
+rlx init <project_name>
+rlx train <config_path>
+rlx eval <checkpoint_path>
+rlx eval --run <run_path>
+rlx eval --run <run_path> --all-checkpoints
+rlx video <checkpoint_path>
+rlx compare <run_a> <run_b> [run_c ...]
+rlx plot <run_a> [run_b ...]
+```
+
+### Run Management
+
+Use these to browse and organize runs:
+
+```bash
+rlx ls
+rlx info <run>
+rlx tag <run> <tag> [tag ...]
+rlx resume <run>
+rlx resume <run> --checkpoint best --timesteps 50000
+rlx sweep <sweep_config>
+```
+
+### Analysis
+
+These commands overlap in input, but not in purpose:
+
+- `rlx info <run>` is factual: metadata, artifacts, config summary.
+- `rlx analyze <run>` is interpretive: overall learning signal and artifact gaps.
+- `rlx explain-metrics <run>` explains PPO metric columns and trends.
+- `rlx diagnose <run>` focuses on likely problems and failure modes.
+- `rlx suggest <run>` gives concrete next actions and config/sweep ideas.
+- `rlx summarize <target>` gives a compact summary for a project, sweep, or run.
+
+Examples:
+
+```bash
+rlx analyze cartpole_ppo_001
+rlx explain-metrics cartpole_ppo_001
+rlx diagnose cartpole_ppo_001
+rlx suggest cartpole_ppo_001
+rlx summarize .
+rlx summarize analysis/sweeps/cartpole_seed_lr_entropy_001
+```
+
+These analysis commands are currently local and deterministic. They do not call an LLM or external API yet.
+
+## Sweeps
+
+`rlx sweep` runs multiple config variants from one sweep YAML.
+
+Example `configs/cartpole_sweep.yaml`:
 
 ```yaml
-run_name: bossfight_ppo
-seed: 42
-device: cuda
+name: cartpole_seed_lr_entropy
+base_config: ppo_cartpole.yaml
+tags: [cartpole, lr-study]
 
+fixed:
+  algo.total_timesteps: 50000
+
+grid:
+  seed: [42, 123]
+  algo.learning_rate: [0.0003, 0.001]
+  algo.entropy_coef: [0.0, 0.01]
+```
+
+Run it:
+
+```bash
+rlx sweep configs/cartpole_sweep.yaml
+```
+
+Then inspect outputs:
+
+```bash
+rlx ls
+rlx compare cartpole_ppo_001 cartpole_ppo_002 cartpole_ppo_003
+rlx summarize analysis/sweeps/cartpole_seed_lr_entropy_001
+```
+
+## Classic Control Configs
+
+The generated starter configs currently target Gymnasium Classic Control:
+
+- `configs/ppo_cartpole.yaml`: `CartPole-v1`
+- `configs/ppo_acrobot.yaml`: `Acrobot-v1`
+- `configs/ppo_mountain_car.yaml`: `MountainCar-v0`
+- `configs/ppo_mountain_car_continuous.yaml`: `MountainCarContinuous-v0`
+- `configs/ppo_pendulum.yaml`: `Pendulum-v1`
+
+Each config uses the same PPO training flow:
+
+```yaml
 env:
-  id: BossFight-v0
-  num_envs: 8
-
-algo:
-  name: ppo
-  total_timesteps: 500000
-  rollout_steps: 128
-  batch_size: 256
-  learning_rate: 0.0003
-  gamma: 0.99
-  gae_lambda: 0.95
-  clip_range: 0.2
-  entropy_coef: 0.01
-  value_coef: 0.5
-  update_epochs: 4
+  id: CartPole-v1
+  num_envs: 4
 
 policy:
   type: mlp
-  hidden_sizes: [256, 256]
-
-checkpoint:
-  save_every: 50000
-
-eval:
-  every: 25000
-  episodes: 20
-  deterministic: true
+  hidden_sizes: [128, 128]
 ```
 
-Configs matter because they make runs reproducible, comparable, and easy to mutate later in a controlled way.
+The only environment difference is the `env.id`. RLCLI validates the id with `gym.make(env.id)` before PPO starts.
+
+## Styles
+
+RLCLI has persistent output styles:
+
+```bash
+rlx styles
+rlx --style minimal
+rlx --style neon
+rlx --style forest
+```
+
+The saved style is stored in:
+
+```text
+~/.config/rlx/config.toml
+```
+
+## Current Limitations
+
+- PPO is the only supported algorithm.
+- Custom envs must still register through Gymnasium before training starts.
+- Custom policies must be Stable-Baselines3-compatible policy classes.
+- Video output is GIF bundles, not mp4.
+- Analysis commands are heuristic and local, not LLM-backed.
+
+## Development Checks
+
+Run targeted checks while developing:
+
+```bash
+python -m ruff check src tests
+python -m compileall src tests
+python -m pytest
+```
+
+Run the release packaging check before uploading to PyPI:
+
+```bash
+python scripts/check_release.py
+```
+
+That command builds into a temporary directory, runs `twine check`, and verifies the wheel includes the `rlx` entrypoint and bundled starter config.
+
+If `pytest` is flaky in a local shell, the CLI can also be smoke-tested directly:
+
+```bash
+rlx init smokeproj
+cd smokeproj
+rlx train configs/ppo_cartpole.yaml
+rlx eval --run runs/cartpole_ppo_001
+rlx plot cartpole_ppo_001
+rlx analyze cartpole_ppo_001
+```
 
 ## Roadmap
 
-### Phase 2: Run Management and Experiment Discipline
+The next major work is not adding more surface area. It is improving depth:
 
-Planned additions:
-
-- `rlx ls`
-- `rlx info <run_name>`
-- `rlx resume <run_name>`
-- `rlx plot <run_a> [run_b ...]`
-- `rlx sweep <sweep_config>`
-- `rlx tag <run_name> <tag>`
-
-This phase adds run browsing, plotting, resuming, sweeps, and better organization.
-
-### Phase 3: AI-Assisted Analysis
-
-Planned additions:
-
-- `rlx analyze <run_name>`
-- `rlx diagnose <run_name>`
-- `rlx suggest <run_name>`
-- `rlx summarize <path_or_experiment>`
-- `rlx explain-metrics <run_name>`
-
-These features are meant to be grounded RL tools, not general chat. They should analyze actual run artifacts and help explain learning behavior, detect failure modes, and recommend what to try next.
-
-### Phase 4: Advisor Mode
-
-Planned addition:
-
-- `rlx advisor run <run_name> --budget <N>`
-
-Advisor mode is intended to run one bounded improvement loop: analyze a baseline run, generate a small set of candidate configs, train them under fixed budgets, evaluate them consistently, and report the best result.
-
-### Phase 5: Research Mode
-
-Planned addition:
-
-- `rlx research <run_name> --rounds <R> --budget <N>`
-
-Research mode extends advisor into a multi-round search loop. In early versions it should remain tightly constrained: fixed round counts, fixed training budgets, deterministic evaluation, full metadata logging, and config-only mutation rather than arbitrary code edits.
-
-## Design Principles
-
-- Local-first: runs, artifacts, and analysis should work without requiring a hosted service.
-- Reproducible: every run should preserve the config, metadata, and outputs needed to understand what happened.
-- CLI-first: the workflow should be scriptable, inspectable, and easy to integrate into existing research habits.
-- Config-driven: configs should be the source of truth for training behavior.
-- Bounded autonomy: future automated features should stay constrained, auditable, and grounded in experiment data.
-
-## Recommended Build Order
-
-1. Build the run system and folder structure.
-2. Build config parsing and validation.
-3. Build `train` with PPO, logging, and checkpoints.
-4. Build `eval`.
-5. Build `video`.
-6. Build `compare`.
-7. Add `ls`, `info`, `plot`, and `sweep`.
-8. Add `analyze`, `diagnose`, `suggest`, `summarize`, and `explain-metrics`.
-9. Add `advisor`.
-10. Add `research`.
-
-## Long-Term Direction
-
-RLCLI is meant to become a disciplined operating layer for RL experiments:
-
-- reproducible run structure
-- config-driven training
-- consistent evaluation
-- visualization and comparison
-- RL-aware analysis
-- bounded automated iteration
-
-The immediate priority is the core experiment workflow. If that foundation is solid, the later AI and research features have real data and structure to stand on.
+- command examples in each help screen
+- stronger release packaging checks
+- custom env and policy loading from scaffolded project code
+- optional LLM-assisted analysis on top of current deterministic analysis
+- advisor/research loops that stay bounded, auditable, and config-driven

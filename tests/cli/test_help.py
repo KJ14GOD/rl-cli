@@ -4,6 +4,26 @@ from rlx.cli import app
 
 runner = CliRunner()
 
+COMMANDS_WITH_EXAMPLES = [
+    "analyze",
+    "compare",
+    "diagnose",
+    "eval",
+    "explain-metrics",
+    "info",
+    "init",
+    "ls",
+    "plot",
+    "resume",
+    "styles",
+    "suggest",
+    "summarize",
+    "sweep",
+    "tag",
+    "train",
+    "video",
+]
+
 
 def test_help_shows_root_command() -> None:
     result = runner.invoke(app, ["--help"])
@@ -13,6 +33,7 @@ def test_help_shows_root_command() -> None:
     assert "--style" in result.stdout
     assert "analyze" in result.stdout
     assert "compare" in result.stdout
+    assert "diagnose" in result.stdout
     assert "eval" in result.stdout
     assert "explain-metrics" in result.stdout
     assert "info" in result.stdout
@@ -21,6 +42,8 @@ def test_help_shows_root_command() -> None:
     assert "plot" in result.stdout
     assert "resume" in result.stdout
     assert "styles" in result.stdout
+    assert "suggest" in result.stdout
+    assert "summarize" in result.stdout
     assert "sweep" in result.stdout
     assert "tag" in result.stdout
     assert "train" in result.stdout
@@ -52,3 +75,12 @@ def test_styles_command_lists_available_themes(tmp_path, monkeypatch) -> None:
     assert "forest" in result.stdout
     assert "ice" in result.stdout
     assert "saved" in result.stdout
+
+
+def test_command_help_screens_include_examples() -> None:
+    for command in COMMANDS_WITH_EXAMPLES:
+        result = runner.invoke(app, [command, "--help"])
+
+        assert result.exit_code == 0
+        assert "Examples" in result.stdout
+        assert "rlx " in result.stdout

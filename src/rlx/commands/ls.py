@@ -6,7 +6,12 @@ from rlx.core.list_runs import RunListError, list_runs
 
 
 def ls_command() -> None:
-    """List runs for the nearest RLCLI project."""
+    """List runs in the nearest RLCLI project.
+
+    Examples:
+
+        rlx ls
+    """
 
     try:
         run_list = list_runs()

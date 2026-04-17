@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 PROJECT_DIRS = (
     "envs",
     "configs",

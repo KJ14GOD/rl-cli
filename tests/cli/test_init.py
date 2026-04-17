@@ -5,8 +5,15 @@ from typer.testing import CliRunner
 from rlx.cli import app
 from rlx.paths import PROJECT_DIRS, STARTER_CONFIG
 
-
 runner = CliRunner()
+
+CLASSIC_CONTROL_CONFIGS = (
+    "ppo_acrobot.yaml",
+    "ppo_cartpole.yaml",
+    "ppo_mountain_car.yaml",
+    "ppo_mountain_car_continuous.yaml",
+    "ppo_pendulum.yaml",
+)
 
 
 def test_init_creates_project_scaffold() -> None:
@@ -24,3 +31,6 @@ def test_init_creates_project_scaffold() -> None:
         starter_config = project_root / STARTER_CONFIG
         assert starter_config.exists()
         assert "CartPole-v1" in starter_config.read_text(encoding="utf-8")
+
+        for filename in CLASSIC_CONTROL_CONFIGS:
+            assert (project_root / "configs" / filename).exists()

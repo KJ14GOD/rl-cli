@@ -10,7 +10,13 @@ RUN_REF_ARGUMENT = typer.Argument(
 
 
 def info_command(run_ref: str = RUN_REF_ARGUMENT) -> None:
-    """Inspect one RLCLI run and summarize its tracked state."""
+    """Show factual metadata and artifacts for one run.
+
+    Examples:
+
+        rlx info cartpole_ppo_001
+        rlx info runs/cartpole_ppo_001
+    """
 
     try:
         info = load_run_info(run_ref)

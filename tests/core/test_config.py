@@ -1,8 +1,17 @@
 from pathlib import Path
 from textwrap import dedent
+
 import pytest
 
 from rlx.config.loader import ConfigFileNotFoundError, ConfigValidationError, load_config
+
+CLASSIC_CONTROL_CONFIGS = {
+    "ppo_acrobot.yaml": "Acrobot-v1",
+    "ppo_cartpole.yaml": "CartPole-v1",
+    "ppo_mountain_car.yaml": "MountainCar-v0",
+    "ppo_mountain_car_continuous.yaml": "MountainCarContinuous-v0",
+    "ppo_pendulum.yaml": "Pendulum-v1",
+}
 
 
 def test_load_config_accepts_starter_template() -> None:
@@ -12,6 +21,15 @@ def test_load_config_accepts_starter_template() -> None:
     assert config.algo.name == "ppo"
     assert config.env.id == "CartPole-v1"
     assert config.policy.hidden_sizes == [128, 128]
+
+
+def test_load_config_accepts_all_classic_control_templates() -> None:
+    for filename, env_id in CLASSIC_CONTROL_CONFIGS.items():
+        config = load_config(Path("src/rlx/templates/project/configs") / filename)
+
+        assert config.env.id == env_id
+        assert config.policy.type == "mlp"
+        assert config.policy.hidden_sizes == [128, 128]
 
 
 def test_load_config_rejects_missing_required_field(tmp_path: Path) -> None:

@@ -4,7 +4,13 @@ from pathlib import Path
 from rlx.config import load_config
 from rlx.core.projects import init_project
 from rlx.core.runs import prepare_run
-from rlx.paths import CONFIG_SNAPSHOT_NAME, METADATA_NAME, METRICS_NAME, RUN_ARTIFACT_DIRS, STARTER_CONFIG
+from rlx.paths import (
+    CONFIG_SNAPSHOT_NAME,
+    METADATA_NAME,
+    METRICS_NAME,
+    RUN_ARTIFACT_DIRS,
+    STARTER_CONFIG,
+)
 
 
 def test_prepare_run_creates_tracked_run_layout(tmp_path: Path) -> None:
@@ -20,7 +26,9 @@ def test_prepare_run_creates_tracked_run_layout(tmp_path: Path) -> None:
     assert result.config_snapshot.name == CONFIG_SNAPSHOT_NAME
     assert result.metadata_path.name == METADATA_NAME
     assert result.metrics_path.name == METRICS_NAME
-    assert result.config_snapshot.read_text(encoding="utf-8") == config_path.read_text(encoding="utf-8")
+    assert result.config_snapshot.read_text(encoding="utf-8") == config_path.read_text(
+        encoding="utf-8"
+    )
     assert result.metrics_path.read_text(encoding="utf-8") == ""
 
     for dirname in RUN_ARTIFACT_DIRS:

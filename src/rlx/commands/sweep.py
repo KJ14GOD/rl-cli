@@ -11,7 +11,12 @@ SWEEP_CONFIG_ARGUMENT = typer.Argument(
 
 
 def sweep_command(sweep_config_path: str = SWEEP_CONFIG_ARGUMENT) -> None:
-    """Run a batch of config variants from one sweep definition."""
+    """Train many config variants from one sweep file.
+
+    Examples:
+
+        rlx sweep configs/cartpole_sweep.yaml
+    """
 
     try:
         result = run_sweep(sweep_config_path)

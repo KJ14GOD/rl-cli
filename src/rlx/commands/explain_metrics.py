@@ -15,7 +15,13 @@ RUN_REF_ARGUMENT = typer.Argument(
 
 
 def explain_metrics_command(run_ref: str = RUN_REF_ARGUMENT) -> None:
-    """Explain PPO metrics logged for one RLCLI run."""
+    """Explain PPO metric columns for one run.
+
+    Examples:
+
+        rlx explain-metrics cartpole_ppo_001
+        rlx explain-metrics runs/cartpole_ppo_001
+    """
 
     try:
         explanation = explain_metrics(run_ref)

@@ -10,7 +10,13 @@ RUN_REFS_ARGUMENT = typer.Argument(
 
 
 def plot_command(run_refs: list[str] = RUN_REFS_ARGUMENT) -> None:
-    """Generate plot bundles from run metrics and eval artifacts."""
+    """Generate training/eval plots for one or more runs.
+
+    Examples:
+
+        rlx plot cartpole_ppo_001
+        rlx plot cartpole_ppo_001 cartpole_ppo_002
+    """
 
     try:
         bundle = plot_runs(run_refs)

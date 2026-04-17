@@ -11,7 +11,13 @@ from rlx.rl import TrainingError, train_ppo
 def train_command(
     config_path: str = typer.Argument(..., help="Path to the YAML experiment config."),
 ) -> None:
-    """Train a PPO experiment from a validated RLCLI config."""
+    """Train a PPO experiment from a validated RLCLI config.
+
+    Examples:
+
+        rlx train configs/ppo_cartpole.yaml
+        rlx train /path/to/project/configs/ppo_cartpole.yaml
+    """
 
     resolved_config_path = Path(config_path).expanduser().resolve()
 

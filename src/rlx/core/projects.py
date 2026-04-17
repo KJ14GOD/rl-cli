@@ -18,6 +18,7 @@ class ProjectInitResult:
     project_root: Path
     created_dirs: tuple[Path, ...]
     starter_config: Path
+    created_files: tuple[Path, ...]
 
 
 def init_project(project_root: Path) -> ProjectInitResult:
@@ -35,14 +36,14 @@ def init_project(project_root: Path) -> ProjectInitResult:
         path.mkdir()
         created_dirs.append(path)
 
+    created_files = _copy_project_template(destination)
     starter_config = destination / STARTER_CONFIG
-    template = files("rlx.templates").joinpath("project", "configs", "ppo_cartpole.yaml")
-    starter_config.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
 
     return ProjectInitResult(
         project_root=destination,
         created_dirs=tuple(created_dirs),
         starter_config=starter_config,
+        created_files=tuple(created_files),
     )
 
 
@@ -61,3 +62,26 @@ def find_project_root(path: Path) -> Path:
         "No RLCLI project root found. Run this command inside an initialized project or use "
         "`rlx init` first."
     )
+
+
+def _copy_project_template(destination: Path) -> list[Path]:
+    template_root = files("rlx.templates").joinpath("project")
+    created_files: list[Path] = []
+
+    def visit(source, relative: Path) -> None:
+        if source.name == "__pycache__" or source.name.endswith(".pyc"):
+            return
+        if relative == Path("__init__.py"):
+            return
+        if source.is_dir():
+            for child in source.iterdir():
+                visit(child, relative / child.name)
+            return
+
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        created_files.append(target)
+
+    visit(template_root, Path())
+    return created_files
