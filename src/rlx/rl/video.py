@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from PIL import Image
 
@@ -110,6 +111,7 @@ def render_checkpoint_video(
 
             while not (terminated or truncated):
                 action, _state = model.predict(obs, deterministic=deterministic)
+                action = _normalize_action(action)
                 obs, reward, terminated, truncated, _info = env.step(action)
                 episode_reward += float(reward)
                 episode_length += 1
@@ -232,6 +234,14 @@ def _capture_frame(env, env_id: str):
     if frame is None:
         raise VideoRenderError(f"Environment returned no frame while rendering: {env_id}")
     return Image.fromarray(frame)
+
+
+def _normalize_action(action: Any) -> Any:
+    """Convert SB3 vectorized predictions into raw Gymnasium actions."""
+
+    if hasattr(action, "item") and getattr(action, "size", None) == 1:
+        return action.item()
+    return action
 
 
 def _save_gif(frames: list[Image.Image], output_path: Path, duration_ms: int) -> None:

@@ -4,6 +4,7 @@ from rich.traceback import install as install_rich_traceback
 from rlx.commands.analyze import analyze_command
 from rlx.commands.compare import compare_command
 from rlx.commands.diagnose import diagnose_command
+from rlx.commands.envs import envs_command
 from rlx.commands.eval import eval_command
 from rlx.commands.explain_metrics import explain_metrics_command
 from rlx.commands.info import info_command
@@ -70,6 +71,7 @@ def main(
 app.command("analyze")(analyze_command)
 app.command("compare")(compare_command)
 app.command("diagnose")(diagnose_command)
+app.command("envs")(envs_command)
 app.command("eval")(eval_command)
 app.command("explain-metrics")(explain_metrics_command)
 app.command("info")(info_command)

@@ -8,6 +8,7 @@ COMMANDS_WITH_EXAMPLES = [
     "analyze",
     "compare",
     "diagnose",
+    "envs",
     "eval",
     "explain-metrics",
     "info",
@@ -34,6 +35,7 @@ def test_help_shows_root_command() -> None:
     assert "analyze" in result.stdout
     assert "compare" in result.stdout
     assert "diagnose" in result.stdout
+    assert "envs" in result.stdout
     assert "eval" in result.stdout
     assert "explain-metrics" in result.stdout
     assert "info" in result.stdout

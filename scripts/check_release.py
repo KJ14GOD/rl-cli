@@ -16,12 +16,14 @@ PYPROJECT = ROOT / "pyproject.toml"
 README = ROOT / "README.md"
 LICENSE = ROOT / "LICENSE"
 STARTER_CONFIG = "rlx/templates/project/configs/ppo_cartpole.yaml"
-CLASSIC_CONTROL_CONFIGS = (
+STARTER_CONFIGS = (
     "rlx/templates/project/configs/ppo_acrobot.yaml",
     STARTER_CONFIG,
     "rlx/templates/project/configs/ppo_mountain_car.yaml",
     "rlx/templates/project/configs/ppo_mountain_car_continuous.yaml",
     "rlx/templates/project/configs/ppo_pendulum.yaml",
+    "rlx/templates/project/configs/ppo_taxi.yaml",
+    "rlx/templates/project/configs/ppo_frozen_lake.yaml",
 )
 ENTRYPOINT = "rlx = rlx.cli:app"
 
@@ -119,7 +121,7 @@ def _check_wheel(path: Path, metadata: dict[str, str]) -> None:
         if any("__pycache__" in name for name in names):
             raise ReleaseCheckError("Wheel contains __pycache__ files.")
         _require_member(names, "rlx/cli.py", path)
-        for config_path in CLASSIC_CONTROL_CONFIGS:
+        for config_path in STARTER_CONFIGS:
             _require_member(names, config_path, path)
 
         metadata_files = [name for name in names if name.endswith(".dist-info/METADATA")]
@@ -147,7 +149,7 @@ def _check_sdist(path: Path) -> None:
             raise ReleaseCheckError("sdist is missing README.md.")
         if not any(name.endswith("/pyproject.toml") for name in names):
             raise ReleaseCheckError("sdist is missing pyproject.toml.")
-        for config_path in CLASSIC_CONTROL_CONFIGS:
+        for config_path in STARTER_CONFIGS:
             if not any(name.endswith(f"/{config_path}") for name in names):
                 raise ReleaseCheckError(f"sdist is missing {config_path}.")
 
