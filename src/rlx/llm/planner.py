@@ -121,6 +121,60 @@ def generate_llm_plan(
     return LLMPlannerResult(proposals=proposals, audit=audit)
 
 
+def generate_llm_repair_plan(
+    *,
+    provider: str,
+    model: str,
+    project_root: Path,
+    base_payload: dict[str, Any],
+    diagnosis: RunDiagnosis,
+    allowed_mutation_keys: tuple[str, ...],
+    locked_mutations: dict[str, Any],
+    excluded_mutation_signatures: set[str],
+    signature_ignored_keys: tuple[str, ...],
+    variants: int,
+    accepted_mutations: list[dict[str, Any]],
+    rejected_proposals: list[dict[str, Any]],
+    attempt: int,
+) -> LLMPlannerResult:
+    context = _build_context(
+        base_payload=base_payload,
+        diagnosis=diagnosis,
+        allowed_mutation_keys=allowed_mutation_keys,
+        locked_mutations=locked_mutations,
+        excluded_mutation_signatures=excluded_mutation_signatures,
+        signature_ignored_keys=signature_ignored_keys,
+        variants=variants,
+    )
+    context["task"] = "Repair PPO YAML config mutations for RLX advisor variants."
+    context["repair"] = {
+        "attempt": attempt,
+        "needed_variants": variants,
+        "accepted_mutations": accepted_mutations,
+        "rejected_proposals": rejected_proposals,
+        "instructions": [
+            "Return replacement proposals only.",
+            "Do not repeat accepted mutations.",
+            "Do not repeat already_tried_signatures.",
+            "Use only allowed mutation keys.",
+            "Prefer multi-field hypotheses when a single-field proposal was already tried.",
+        ],
+    }
+    payload = _call_provider(
+        provider=provider,
+        model=model,
+        project_root=project_root,
+        context=context,
+        allowed_mutation_keys=allowed_mutation_keys,
+    )
+    proposals, audit = _parse_proposals_with_audit(
+        payload,
+        allowed_mutation_keys=allowed_mutation_keys,
+    )
+    audit["repair_attempt"] = attempt
+    return LLMPlannerResult(proposals=proposals, audit=audit)
+
+
 def _call_provider(
     *,
     provider: str,
@@ -282,6 +336,10 @@ def _ollama_response(
 
 
 def _mock_response() -> dict[str, Any]:
+    sequenced = os.environ.get("RLX_LLM_MOCK_RESPONSES")
+    if sequenced:
+        return _mock_sequence_response(sequenced)
+
     raw = os.environ.get("RLX_LLM_MOCK_RESPONSE")
     if not raw:
         raise LLMPlannerError("RLX_LLM_MOCK_RESPONSE is required when using mock provider.")
@@ -292,6 +350,29 @@ def _mock_response() -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise LLMPlannerError("RLX_LLM_MOCK_RESPONSE must be a JSON object.")
     return payload
+
+
+def _mock_sequence_response(raw: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise LLMPlannerError("RLX_LLM_MOCK_RESPONSES is not valid JSON.") from exc
+    if not isinstance(payload, list) or not payload:
+        raise LLMPlannerError("RLX_LLM_MOCK_RESPONSES must be a non-empty JSON list.")
+
+    index_raw = os.environ.get("RLX_LLM_MOCK_RESPONSE_INDEX", "0")
+    try:
+        index = int(index_raw)
+    except ValueError:
+        index = 0
+    if index >= len(payload):
+        index = len(payload) - 1
+    os.environ["RLX_LLM_MOCK_RESPONSE_INDEX"] = str(index + 1)
+
+    item = payload[index]
+    if not isinstance(item, dict):
+        raise LLMPlannerError("Each RLX_LLM_MOCK_RESPONSES item must be a JSON object.")
+    return item
 
 
 def _parse_proposals(

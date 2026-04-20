@@ -171,6 +171,78 @@ def test_advisor_llm_fills_missing_variants_with_rules(monkeypatch) -> None:
         ]
 
 
+def test_advisor_llm_repairs_rejected_proposals_before_rules(monkeypatch) -> None:
+    with runner.isolated_filesystem():
+        init_result = runner.invoke(app, ["init", "bossfight"])
+        assert init_result.exit_code == 0
+
+        run_dir = Path("bossfight/runs/tiny_advisor_001")
+        _write_fake_run(
+            run_dir=run_dir,
+            run_name="tiny_advisor",
+            rewards=(25.0, 26.0, 26.5),
+        )
+        monkeypatch.setenv("RLX_LLM_MOCK_RESPONSE_INDEX", "0")
+        monkeypatch.setenv(
+            "RLX_LLM_MOCK_RESPONSES",
+            json.dumps(
+                [
+                    {
+                        "proposals": [
+                            {
+                                "changes": [{"key": "env.id", "value": "Acrobot-v1"}],
+                                "signal": "illegal env change",
+                                "rationale": "This should be repaired.",
+                                "priority": "high",
+                            }
+                        ]
+                    },
+                    {
+                        "proposals": [
+                            {
+                                "changes": [
+                                    {"key": "algo.learning_rate", "value": 0.0002},
+                                    {"key": "algo.clip_range", "value": 0.15},
+                                ],
+                                "signal": "repair signal",
+                                "rationale": "Use allowed PPO knobs for a replacement.",
+                                "priority": "high",
+                            }
+                        ]
+                    },
+                ]
+            ),
+        )
+
+        result = run_advisor(
+            "tiny_advisor_001",
+            variants=1,
+            planner="llm",
+            llm_provider="mock",
+            llm_model="mock-model",
+            cwd=Path("bossfight"),
+        )
+
+        assert len(result.variants) == 1
+        assert result.variants[0].proposal_source == "llm"
+        assert result.variants[0].mutations == {
+            "algo.learning_rate": 0.0002,
+            "algo.clip_range": 0.15,
+        }
+
+        manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+        protocol = manifest["protocol"]
+        assert protocol["fallback"]["used"] is False
+        assert protocol["fallback"]["llm_valid"] == 1
+        audit = protocol["planner_audit"]
+        assert audit["llm_response"]["accepted_count"] == 0
+        assert audit["llm_response"]["rejected_count"] == 1
+        assert audit["repair_attempts"] == 1
+        assert audit["repairs"][0]["selected_count"] == 1
+        assert audit["repairs"][0]["llm_response"]["accepted_count"] == 1
+        assert any(row["source"] == "llm_repair" for row in audit["proposals"])
+
+
 def test_advisor_ollama_provider_uses_local_chat_api(monkeypatch) -> None:
     with runner.isolated_filesystem():
         init_result = runner.invoke(app, ["init", "bossfight"])

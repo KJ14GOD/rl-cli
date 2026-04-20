@@ -22,6 +22,7 @@ from rlx.llm.planner import (
     LLM_DEFAULT_PROVIDER,
     LLMPlannerError,
     generate_llm_plan,
+    generate_llm_repair_plan,
 )
 from rlx.paths import CONFIG_SNAPSHOT_NAME
 from rlx.rl import EvaluationError, TrainingError, evaluate_checkpoint, train_ppo
@@ -33,6 +34,9 @@ class AdvisorError(Exception):
 
 class AdvisorExhaustedError(AdvisorError):
     """Raised when advisor has no new valid proposals left."""
+
+
+LLM_REPAIR_ATTEMPTS = 2
 
 
 @dataclass(frozen=True)
@@ -323,6 +327,8 @@ def _select_planner_proposals(
         "llm_raw_count": None,
         "llm_selected_count": None,
         "rule_fill_count": None,
+        "repair_attempts": 0,
+        "repairs": [],
         "proposals": [],
     }
 
@@ -398,6 +404,21 @@ def _select_planner_proposals(
         excluded_mutation_signatures=excluded_mutation_signatures,
         signature_ignored_keys=signature_ignored_keys,
     )
+    audit["llm_selected_count"] = len(selected)
+    selected = _repair_llm_proposals(
+        selected=selected,
+        audit=audit,
+        provider=llm_provider,
+        model=llm_model,
+        project_root=project_root,
+        base_payload=base_payload,
+        diagnosis=diagnosis,
+        variants=variants,
+        locked_mutations=locked_mutations,
+        allowed_mutation_keys=allowed_mutation_keys or LLM_ALLOWED_MUTATION_KEYS,
+        excluded_mutation_signatures=excluded_mutation_signatures,
+        signature_ignored_keys=signature_ignored_keys,
+    )
     fallback["llm_valid"] = len(selected)
     audit["llm_selected_count"] = len(selected)
     missing = variants - len(selected)
@@ -464,6 +485,107 @@ def _select_planner_proposals(
         )
         selected.extend(rule_fill)
     return selected, fallback, audit
+
+
+def _repair_llm_proposals(
+    *,
+    selected: list[AdvisorProposal],
+    audit: dict[str, Any],
+    provider: str,
+    model: str,
+    project_root: Path,
+    base_payload: dict[str, Any],
+    diagnosis: RunDiagnosis,
+    variants: int,
+    locked_mutations: dict[str, Any],
+    allowed_mutation_keys: tuple[str, ...],
+    excluded_mutation_signatures: set[str],
+    signature_ignored_keys: tuple[str, ...],
+) -> list[AdvisorProposal]:
+    repaired = list(selected)
+    for attempt in range(1, LLM_REPAIR_ATTEMPTS + 1):
+        missing = variants - len(repaired)
+        if missing <= 0:
+            break
+
+        selected_signatures = _proposal_signatures(
+            repaired,
+            ignored_keys=signature_ignored_keys,
+        )
+        try:
+            repair_result = generate_llm_repair_plan(
+                provider=provider,
+                model=model,
+                project_root=project_root,
+                base_payload=base_payload,
+                diagnosis=diagnosis,
+                allowed_mutation_keys=allowed_mutation_keys,
+                locked_mutations=locked_mutations,
+                excluded_mutation_signatures=excluded_mutation_signatures
+                | selected_signatures,
+                signature_ignored_keys=signature_ignored_keys,
+                variants=missing,
+                accepted_mutations=[item.mutations for item in repaired],
+                rejected_proposals=_repair_rejection_summary(audit),
+                attempt=attempt,
+            )
+        except LLMPlannerError:
+            break
+
+        repair_source = [
+            AdvisorProposal(
+                mutations=item.mutations,
+                signal=item.signal,
+                rationale=item.rationale,
+                priority=item.priority,
+                source="llm",
+            )
+            for item in repair_result.proposals
+        ]
+        excluded_for_repair = excluded_mutation_signatures | selected_signatures
+        selected_repair_signatures = _selected_signatures(
+            repair_source,
+            limit=missing,
+            base_payload=base_payload,
+            locked_mutations=locked_mutations,
+            allowed_mutation_keys=allowed_mutation_keys,
+            excluded_mutation_signatures=excluded_for_repair,
+            signature_ignored_keys=signature_ignored_keys,
+        )
+        repair_rows = _audit_proposals(
+            repair_source,
+            selected_signatures=selected_repair_signatures,
+            base_payload=base_payload,
+            locked_mutations=locked_mutations,
+            allowed_mutation_keys=allowed_mutation_keys,
+            excluded_mutation_signatures=excluded_for_repair,
+            signature_ignored_keys=signature_ignored_keys,
+            source="llm_repair",
+        )
+        repair_selected = _select_proposals(
+            repair_source,
+            limit=missing,
+            base_payload=base_payload,
+            locked_mutations=locked_mutations,
+            allowed_mutation_keys=allowed_mutation_keys,
+            excluded_mutation_signatures=excluded_for_repair,
+            signature_ignored_keys=signature_ignored_keys,
+        )
+        audit["repair_attempts"] = attempt
+        audit["repairs"].append(
+            {
+                "attempt": attempt,
+                "requested": missing,
+                "llm_response": repair_result.audit,
+                "selected_count": len(repair_selected),
+                "proposals": repair_rows,
+            }
+        )
+        audit["proposals"].extend(repair_rows)
+        if not repair_selected:
+            continue
+        repaired.extend(repair_selected)
+    return repaired
 
 
 def _build_proposals(
@@ -733,6 +855,51 @@ def _selected_signatures(
         )
         if signature
     }
+
+
+def _proposal_signatures(
+    proposals: list[AdvisorProposal],
+    *,
+    ignored_keys: tuple[str, ...],
+) -> set[str]:
+    return {
+        signature
+        for signature in (
+            mutation_signature(item.mutations, ignored_keys=ignored_keys)
+            for item in proposals
+        )
+        if signature
+    }
+
+
+def _repair_rejection_summary(audit: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    llm_response = audit.get("llm_response")
+    if isinstance(llm_response, dict):
+        for item in llm_response.get("rejected", []):
+            if isinstance(item, dict):
+                rows.append(
+                    {
+                        "stage": "parse",
+                        "reason": item.get("reason"),
+                        "raw": item.get("raw"),
+                        "rejected_changes": item.get("rejected_changes", []),
+                    }
+                )
+
+    for item in audit.get("proposals", []):
+        if not isinstance(item, dict) or item.get("accepted"):
+            continue
+        rows.append(
+            {
+                "stage": "selection",
+                "reason": item.get("reason"),
+                "mutations": item.get("mutations"),
+                "effective_mutations": item.get("effective_mutations"),
+                "signature": item.get("signature"),
+            }
+        )
+    return rows[-20:]
 
 
 def _audit_proposals(
