@@ -24,6 +24,13 @@ def test_init_creates_project_scaffold() -> None:
         starter_config = project_root / STARTER_CONFIG
         assert starter_config.exists()
         assert "CartPole-v1" in starter_config.read_text(encoding="utf-8")
+        assert (project_root / ".env.example").exists()
+        assert "cp .env.example .env" in (project_root / ".env.example").read_text(
+            encoding="utf-8"
+        )
+        assert (project_root / ".gitignore").exists()
+        assert ".env" in (project_root / ".gitignore").read_text(encoding="utf-8")
+        assert "cp .env.example .env" in result.stdout
 
         for filename in catalog_config_names():
             assert (project_root / "configs" / filename).exists()

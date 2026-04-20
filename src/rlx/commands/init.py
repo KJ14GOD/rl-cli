@@ -31,6 +31,10 @@ def init_command(
                 f"[path]{result.starter_config.relative_to(result.project_root)}[/path]",
             ),
             ("[muted]Directories[/muted]", f"[value]{len(result.created_dirs)}[/value]"),
+            (
+                "[muted]LLM setup[/muted]",
+                "[value]cp .env.example .env[/value]",
+            ),
             ("[muted]Next[/muted]", f"[value]cd {result.project_root.name}[/value]"),
         ]
     )

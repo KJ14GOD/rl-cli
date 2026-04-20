@@ -1,6 +1,7 @@
 import typer
 from rich.traceback import install as install_rich_traceback
 
+from rlx.commands.advisor import advisor_command
 from rlx.commands.analyze import analyze_command
 from rlx.commands.compare import compare_command
 from rlx.commands.diagnose import diagnose_command
@@ -11,6 +12,7 @@ from rlx.commands.info import info_command
 from rlx.commands.init import init_command
 from rlx.commands.ls import ls_command
 from rlx.commands.plot import plot_command
+from rlx.commands.research import research_command
 from rlx.commands.resume import resume_command
 from rlx.commands.styles import styles_command
 from rlx.commands.suggest import suggest_command
@@ -69,6 +71,7 @@ def main(
 
 
 app.command("analyze")(analyze_command)
+app.command("advisor")(advisor_command)
 app.command("compare")(compare_command)
 app.command("diagnose")(diagnose_command)
 app.command("envs")(envs_command)
@@ -78,6 +81,7 @@ app.command("info")(info_command)
 app.command("init")(init_command)
 app.command("ls")(ls_command)
 app.command("plot")(plot_command)
+app.command("research")(research_command)
 app.command("resume")(resume_command)
 app.command("styles")(styles_command)
 app.command("suggest")(suggest_command)

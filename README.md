@@ -327,5 +327,6 @@ The next major work is not adding more surface area. It is improving depth:
 - command examples in each help screen
 - stronger release packaging checks
 - custom env and policy loading from scaffolded project code
-- optional LLM-assisted analysis on top of current deterministic analysis
+- optional LLM-assisted analysis on top of current deterministic analysi
 - advisor/research loops that stay bounded, auditable, and config-driven
+

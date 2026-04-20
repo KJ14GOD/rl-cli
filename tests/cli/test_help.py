@@ -6,6 +6,7 @@ runner = CliRunner()
 
 COMMANDS_WITH_EXAMPLES = [
     "analyze",
+    "advisor",
     "compare",
     "diagnose",
     "envs",
@@ -15,6 +16,7 @@ COMMANDS_WITH_EXAMPLES = [
     "init",
     "ls",
     "plot",
+    "research",
     "resume",
     "styles",
     "suggest",
@@ -33,6 +35,7 @@ def test_help_shows_root_command() -> None:
     assert "Local-first CLI for reinforcement learning experiments." in result.stdout
     assert "--style" in result.stdout
     assert "analyze" in result.stdout
+    assert "advisor" in result.stdout
     assert "compare" in result.stdout
     assert "diagnose" in result.stdout
     assert "envs" in result.stdout
@@ -42,6 +45,7 @@ def test_help_shows_root_command() -> None:
     assert "init" in result.stdout
     assert "ls" in result.stdout
     assert "plot" in result.stdout
+    assert "research" in result.stdout
     assert "resume" in result.stdout
     assert "styles" in result.stdout
     assert "suggest" in result.stdout

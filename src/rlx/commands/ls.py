@@ -44,14 +44,14 @@ def ls_command() -> None:
         )
         return
 
-    table = Table(expand=True, padding=(0, 1))
-    table.add_column("Run", style="accent", no_wrap=True)
-    table.add_column("Tags", width=16, overflow="fold")
+    table = Table(expand=True, padding=(0, 0))
+    table.add_column("Run", style="accent", no_wrap=True, min_width=14)
+    table.add_column("Tags", max_width=12, overflow="fold")
     table.add_column("Status", no_wrap=True)
     table.add_column("Env", no_wrap=True)
-    table.add_column("Final Train", justify="right", no_wrap=True)
-    table.add_column("Best Eval", justify="right", no_wrap=True)
-    table.add_column("Timesteps", justify="right", no_wrap=True)
+    table.add_column("Final", justify="right", no_wrap=True)
+    table.add_column("Eval", justify="right", no_wrap=True)
+    table.add_column("Steps", justify="right", no_wrap=True)
 
     for run in run_list.runs:
         table.add_row(
