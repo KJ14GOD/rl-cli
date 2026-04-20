@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = ROOT / "pyproject.toml"
 README = ROOT / "README.md"
 LICENSE = ROOT / "LICENSE"
+PACKAGE_INIT = ROOT / "src" / "rlx" / "__init__.py"
 STARTER_CONFIG = "rlx/templates/project/configs/ppo_cartpole.yaml"
 STARTER_CONFIGS = (
     "rlx/templates/project/configs/ppo_acrobot.yaml",
@@ -38,7 +39,9 @@ class ReleaseCheckError(Exception):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate RLCLI packaging before a PyPI upload.")
+    parser = argparse.ArgumentParser(
+        description="Validate RLX Workbench packaging before a PyPI upload."
+    )
     parser.add_argument(
         "--skip-build",
         action="store_true",
@@ -67,6 +70,8 @@ def _check_static_metadata() -> dict[str, str]:
         raise ReleaseCheckError("README.md is missing.")
     if not LICENSE.exists():
         raise ReleaseCheckError("LICENSE is missing.")
+    if not PACKAGE_INIT.exists():
+        raise ReleaseCheckError("src/rlx/__init__.py is missing.")
 
     payload = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
     project = payload.get("project")
@@ -82,6 +87,7 @@ def _check_static_metadata() -> dict[str, str]:
         raise ReleaseCheckError("Package name is too close to the rejected rlcli namespace.")
     if not re.fullmatch(r"\d+\.\d+\.\d+(?:[a-zA-Z0-9.-]+)?", version):
         raise ReleaseCheckError(f"Version does not look release-ready: {version}")
+    _check_runtime_version(version)
 
     scripts = project.get("scripts")
     if not isinstance(scripts, dict) or scripts.get("rlx") != "rlx.cli:app":
@@ -164,6 +170,17 @@ def _required_string(project: dict[str, object], key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ReleaseCheckError(f"project.{key} must be a non-empty string.")
     return value.strip()
+
+
+def _check_runtime_version(expected: str) -> None:
+    init_text = PACKAGE_INIT.read_text(encoding="utf-8")
+    match = re.search(r'^__version__\s*=\s*"([^"]+)"', init_text, re.MULTILINE)
+    if not match:
+        raise ReleaseCheckError("src/rlx/__init__.py must define __version__.")
+    if match.group(1) != expected:
+        raise ReleaseCheckError(
+            f"src/rlx/__version__ is {match.group(1)}, expected {expected}."
+        )
 
 
 def _require_member(names: set[str], expected: str, artifact: Path) -> None:
