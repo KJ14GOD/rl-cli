@@ -25,6 +25,11 @@ STARTER_CONFIGS = (
     "rlx/templates/project/configs/ppo_taxi.yaml",
     "rlx/templates/project/configs/ppo_frozen_lake.yaml",
 )
+STARTER_FILES = (
+    *STARTER_CONFIGS,
+    "rlx/templates/project/.env.example",
+    "rlx/templates/project/.gitignore",
+)
 ENTRYPOINT = "rlx = rlx.cli:app"
 
 
@@ -121,8 +126,8 @@ def _check_wheel(path: Path, metadata: dict[str, str]) -> None:
         if any("__pycache__" in name for name in names):
             raise ReleaseCheckError("Wheel contains __pycache__ files.")
         _require_member(names, "rlx/cli.py", path)
-        for config_path in STARTER_CONFIGS:
-            _require_member(names, config_path, path)
+        for starter_path in STARTER_FILES:
+            _require_member(names, starter_path, path)
 
         metadata_files = [name for name in names if name.endswith(".dist-info/METADATA")]
         entrypoint_files = [name for name in names if name.endswith(".dist-info/entry_points.txt")]
@@ -149,9 +154,9 @@ def _check_sdist(path: Path) -> None:
             raise ReleaseCheckError("sdist is missing README.md.")
         if not any(name.endswith("/pyproject.toml") for name in names):
             raise ReleaseCheckError("sdist is missing pyproject.toml.")
-        for config_path in STARTER_CONFIGS:
-            if not any(name.endswith(f"/{config_path}") for name in names):
-                raise ReleaseCheckError(f"sdist is missing {config_path}.")
+        for starter_path in STARTER_FILES:
+            if not any(name.endswith(f"/{starter_path}") for name in names):
+                raise ReleaseCheckError(f"sdist is missing {starter_path}.")
 
 
 def _required_string(project: dict[str, object], key: str) -> str:

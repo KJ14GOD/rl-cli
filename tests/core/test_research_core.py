@@ -43,9 +43,13 @@ def test_research_dry_run_creates_research_journal() -> None:
         assert manifest["artifacts"][0]["key"] == "scoreboard"
         assert any(artifact["key"] == "progress" for artifact in manifest["artifacts"])
         assert "patience" not in manifest["settings"]
+        assert manifest["protocol"]["version"] == 2
+        assert manifest["protocol"]["score_mode"] == "existing_eval_or_rollout_signal"
         assert manifest["protocol"]["objective"]["metric"] == "eval_mean_reward"
+        assert manifest["protocol"]["objective"]["higher_is_better"] is True
         assert manifest["protocol"]["budget"]["timesteps_per_variant"] == 256
         assert manifest["protocol"]["locked_mutations"]["algo.total_timesteps"] == 256
+        assert manifest["protocol"]["llm_strict"] is False
         assert "env.id" not in manifest["protocol"]["allowed_mutation_keys"]
         assert len(manifest["rounds"]) == 3
         assert len(manifest["rounds"][0]["variants"]) == 2
@@ -100,6 +104,40 @@ def test_research_resume_extends_existing_bundle_without_repeats() -> None:
                 }
                 signatures.append(json.dumps(effective, sort_keys=True))
         assert len(signatures) == len(set(signatures))
+
+
+def test_research_stops_cleanly_when_proposal_space_is_exhausted() -> None:
+    with runner.isolated_filesystem():
+        init_result = runner.invoke(app, ["init", "bossfight"])
+        assert init_result.exit_code == 0
+
+        _write_fake_run(Path("bossfight/runs/tiny_research_001"))
+
+        result = run_research(
+            "tiny_research_001",
+            rounds=20,
+            variants=3,
+            cwd=Path("bossfight"),
+        )
+
+        assert result.mode == "dry_run"
+        assert len(result.rounds) < 20
+        assert "proposal space exhausted" in result.stop_reason
+
+        manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+        assert manifest["stop_reason"] == result.stop_reason
+
+        exhausted_manifests = []
+        for path in Path("bossfight/analysis/advisor").glob(
+            "tiny_research_001_advisor_*/manifest.json"
+        ):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if payload.get("status") == "exhausted":
+                exhausted_manifests.append(payload)
+
+        assert exhausted_manifests
+        assert exhausted_manifests[-1]["stop_reason"] == "proposal space exhausted"
+        assert exhausted_manifests[-1]["variants"] == []
 
 
 def _write_fake_run(run_dir: Path) -> None:

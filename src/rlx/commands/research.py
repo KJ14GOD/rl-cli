@@ -3,7 +3,7 @@ from rich.table import Table
 
 from rlx.console import build_summary, console, print_panel
 from rlx.core.research import ResearchError, ResearchResult, resume_research, run_research
-from rlx.llm.planner import LLM_DEFAULT_MODEL, LLM_DEFAULT_PROVIDER
+from rlx.llm.planner import LLM_DEFAULT_MODEL, LLM_DEFAULT_PROVIDER, LLM_SUPPORTED_PROVIDERS
 
 RUN_REF_ARGUMENT = typer.Argument(
     None,
@@ -62,7 +62,10 @@ PLANNER_OPTION = typer.Option(
 LLM_PROVIDER_OPTION = typer.Option(
     None,
     "--llm-provider",
-    help=f"LLM provider for --planner llm. Defaults to {LLM_DEFAULT_PROVIDER}.",
+    help=(
+        f"LLM provider for --planner llm. Defaults to {LLM_DEFAULT_PROVIDER}. "
+        f"Supported: {', '.join(LLM_SUPPORTED_PROVIDERS)}."
+    ),
 )
 
 LLM_MODEL_OPTION = typer.Option(

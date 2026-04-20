@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from rlx.config import ConfigError, load_config
-from rlx.core.advisor import AdvisorError, mutation_signature, run_advisor
+from rlx.core.advisor import (
+    AdvisorError,
+    AdvisorExhaustedError,
+    mutation_signature,
+    run_advisor,
+)
 from rlx.core.diagnose import DiagnoseError, diagnose_run
 from rlx.core.projects import ProjectLookupError, find_project_root
 from rlx.llm.env import get_env_value
@@ -360,6 +365,32 @@ def _continue_research(
                 llm_strict=llm_strict,
                 cwd=project_root,
             )
+        except AdvisorExhaustedError as exc:
+            stop_reason = str(exc)
+            if not stop_reason:
+                stop_reason = "proposal space exhausted"
+            score_plot_path, progress_plot_path = _write_outputs(
+                manifest_path=manifest_path,
+                report_path=report_path,
+                project_root=project_root,
+                bundle_dir=bundle_dir,
+                initial_run_id=initial_run_id,
+                initial_score=initial_score,
+                initial_score_source=initial_score_source,
+                champion_run_id=champion_run_id,
+                champion_score=champion_score,
+                champion_score_source=champion_score_source,
+                mode="executed" if execute else "dry_run",
+                settings={
+                    "rounds": target_rounds,
+                    "variants": variants,
+                    "min_improvement": min_improvement,
+                },
+                protocol=protocol,
+                rounds=research_rounds,
+                stop_reason=stop_reason,
+            )
+            break
         except AdvisorError as exc:
             raise ResearchError(str(exc)) from exc
 

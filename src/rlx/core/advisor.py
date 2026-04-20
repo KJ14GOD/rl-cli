@@ -21,7 +21,7 @@ from rlx.llm.planner import (
     LLM_DEFAULT_MODEL,
     LLM_DEFAULT_PROVIDER,
     LLMPlannerError,
-    generate_llm_proposals,
+    generate_llm_plan,
 )
 from rlx.paths import CONFIG_SNAPSHOT_NAME
 from rlx.rl import EvaluationError, TrainingError, evaluate_checkpoint, train_ppo
@@ -29,6 +29,10 @@ from rlx.rl import EvaluationError, TrainingError, evaluate_checkpoint, train_pp
 
 class AdvisorError(Exception):
     """Raised when RLCLI cannot build or execute an advisor plan."""
+
+
+class AdvisorExhaustedError(AdvisorError):
+    """Raised when advisor has no new valid proposals left."""
 
 
 @dataclass(frozen=True)
@@ -142,7 +146,7 @@ def run_advisor(
     if planner_name == "llm" and resolved_allowed_keys is None:
         resolved_allowed_keys = LLM_ALLOWED_MUTATION_KEYS
 
-    proposals, fallback = _select_planner_proposals(
+    proposals, fallback, planner_audit = _select_planner_proposals(
         planner=planner_name,
         base_payload=base_payload,
         diagnosis=diagnosis,
@@ -157,7 +161,29 @@ def run_advisor(
         llm_strict=llm_strict,
     )
     if not proposals:
-        raise AdvisorError("Advisor could not create any valid variant proposals.")
+        _write_exhausted_manifest(
+            manifest_path=bundle_dir / "manifest.json",
+            project_root=project_root,
+            bundle_dir=bundle_dir,
+            mode="executed" if execute else "dry_run",
+            baseline_run_id=baseline_run.run_id,
+            baseline_run_dir=baseline_run.run_dir,
+            diagnosis=diagnosis,
+            fixed_mutations=_effective_locked_mutations(base_payload, fixed_mutations),
+            allowed_mutation_keys=resolved_allowed_keys,
+            excluded_mutation_signatures=excluded_mutation_signatures or set(),
+            require_eval_score=require_eval_score,
+            planner=planner_name,
+            llm_provider=resolved_llm_provider if planner_name == "llm" else None,
+            llm_model=resolved_llm_model if planner_name == "llm" else None,
+            llm_strict=llm_strict,
+            fallback=fallback,
+            planner_audit=planner_audit,
+        )
+        raise AdvisorExhaustedError(
+            f"Advisor proposal space exhausted for {baseline_run.run_id}. "
+            f"Audit: {bundle_dir / 'manifest.json'}"
+        )
 
     context_actions = _context_actions(diagnosis)
     baseline_score, baseline_score_source = _score_run(
@@ -227,6 +253,7 @@ def run_advisor(
         llm_model=resolved_llm_model if planner_name == "llm" else None,
         llm_strict=llm_strict,
         fallback=fallback,
+        planner_audit=planner_audit,
     )
     _write_plan(
         plan_path=plan_path,
@@ -282,7 +309,7 @@ def _select_planner_proposals(
     llm_provider: str,
     llm_model: str,
     llm_strict: bool,
-) -> tuple[list[AdvisorProposal], dict[str, Any]]:
+) -> tuple[list[AdvisorProposal], dict[str, Any], dict[str, Any]]:
     fallback = {
         "used": False,
         "mode": "none",
@@ -291,23 +318,29 @@ def _select_planner_proposals(
         "llm_valid": None,
         "rules_filled": 0,
     }
+    audit: dict[str, Any] = {
+        "planner": planner,
+        "llm_raw_count": None,
+        "llm_selected_count": None,
+        "rule_fill_count": None,
+        "proposals": [],
+    }
 
     if planner == "rules":
-        return (
-            _select_proposals(
-                _build_proposals(base_payload, diagnosis),
-                limit=variants,
-                base_payload=base_payload,
-                locked_mutations=locked_mutations,
-                allowed_mutation_keys=allowed_mutation_keys,
-                excluded_mutation_signatures=excluded_mutation_signatures,
-                signature_ignored_keys=signature_ignored_keys,
-            ),
-            fallback,
+        selected = _select_proposals(
+            _build_proposals(base_payload, diagnosis),
+            limit=variants,
+            base_payload=base_payload,
+            locked_mutations=locked_mutations,
+            allowed_mutation_keys=allowed_mutation_keys,
+            excluded_mutation_signatures=excluded_mutation_signatures,
+            signature_ignored_keys=signature_ignored_keys,
         )
+        audit["rule_fill_count"] = len(selected)
+        return selected, fallback, audit
 
     try:
-        llm_raw = generate_llm_proposals(
+        llm_result = generate_llm_plan(
             provider=llm_provider,
             model=llm_model,
             project_root=project_root,
@@ -322,6 +355,9 @@ def _select_planner_proposals(
     except LLMPlannerError as exc:
         raise AdvisorError(str(exc)) from exc
 
+    llm_raw = llm_result.proposals
+    audit["llm_raw_count"] = len(llm_raw)
+    audit["llm_response"] = llm_result.audit
     llm_source = [
         AdvisorProposal(
             mutations=item.mutations,
@@ -332,6 +368,27 @@ def _select_planner_proposals(
         )
         for item in llm_raw
     ]
+    selected_llm_signatures = _selected_signatures(
+        llm_source,
+        limit=variants,
+        base_payload=base_payload,
+        locked_mutations=locked_mutations,
+        allowed_mutation_keys=allowed_mutation_keys,
+        excluded_mutation_signatures=excluded_mutation_signatures,
+        signature_ignored_keys=signature_ignored_keys,
+    )
+    audit["proposals"].extend(
+        _audit_proposals(
+            llm_source,
+            selected_signatures=selected_llm_signatures,
+            base_payload=base_payload,
+            locked_mutations=locked_mutations,
+            allowed_mutation_keys=allowed_mutation_keys,
+            excluded_mutation_signatures=excluded_mutation_signatures,
+            signature_ignored_keys=signature_ignored_keys,
+            source="llm",
+        )
+    )
     selected = _select_proposals(
         llm_source,
         limit=variants,
@@ -342,9 +399,10 @@ def _select_planner_proposals(
         signature_ignored_keys=signature_ignored_keys,
     )
     fallback["llm_valid"] = len(selected)
+    audit["llm_selected_count"] = len(selected)
     missing = variants - len(selected)
     if missing <= 0:
-        return selected, fallback
+        return selected, fallback, audit
 
     if llm_strict:
         raise AdvisorError(
@@ -360,14 +418,37 @@ def _select_planner_proposals(
         )
         if signature
     }
-    rule_fill = _select_proposals(
-        _build_proposals(base_payload, diagnosis),
+    rule_source = _build_proposals(base_payload, diagnosis)
+    selected_rule_signatures = _selected_signatures(
+        rule_source,
         limit=missing,
         base_payload=base_payload,
         locked_mutations=locked_mutations,
         allowed_mutation_keys=allowed_mutation_keys,
         excluded_mutation_signatures=excluded_mutation_signatures | selected_signatures,
         signature_ignored_keys=signature_ignored_keys,
+    )
+    rule_fill = _select_proposals(
+        rule_source,
+        limit=missing,
+        base_payload=base_payload,
+        locked_mutations=locked_mutations,
+        allowed_mutation_keys=allowed_mutation_keys,
+        excluded_mutation_signatures=excluded_mutation_signatures | selected_signatures,
+        signature_ignored_keys=signature_ignored_keys,
+    )
+    audit["rule_fill_count"] = len(rule_fill)
+    audit["proposals"].extend(
+        _audit_proposals(
+            rule_source,
+            selected_signatures=selected_rule_signatures,
+            base_payload=base_payload,
+            locked_mutations=locked_mutations,
+            allowed_mutation_keys=allowed_mutation_keys,
+            excluded_mutation_signatures=excluded_mutation_signatures | selected_signatures,
+            signature_ignored_keys=signature_ignored_keys,
+            source="rules",
+        )
     )
     if rule_fill:
         fallback.update(
@@ -382,7 +463,7 @@ def _select_planner_proposals(
             }
         )
         selected.extend(rule_fill)
-    return selected, fallback
+    return selected, fallback, audit
 
 
 def _build_proposals(
@@ -625,6 +706,120 @@ def _select_proposals(
     return selected
 
 
+def _selected_signatures(
+    proposals: list[AdvisorProposal],
+    *,
+    limit: int,
+    base_payload: dict[str, Any],
+    locked_mutations: dict[str, Any],
+    allowed_mutation_keys: tuple[str, ...] | None,
+    excluded_mutation_signatures: set[str],
+    signature_ignored_keys: tuple[str, ...],
+) -> set[str]:
+    selected = _select_proposals(
+        proposals,
+        limit=limit,
+        base_payload=base_payload,
+        locked_mutations=locked_mutations,
+        allowed_mutation_keys=allowed_mutation_keys,
+        excluded_mutation_signatures=excluded_mutation_signatures,
+        signature_ignored_keys=signature_ignored_keys,
+    )
+    return {
+        signature
+        for signature in (
+            mutation_signature(item.mutations, ignored_keys=signature_ignored_keys)
+            for item in selected
+        )
+        if signature
+    }
+
+
+def _audit_proposals(
+    proposals: list[AdvisorProposal],
+    *,
+    selected_signatures: set[str],
+    base_payload: dict[str, Any],
+    locked_mutations: dict[str, Any],
+    allowed_mutation_keys: tuple[str, ...] | None,
+    excluded_mutation_signatures: set[str],
+    signature_ignored_keys: tuple[str, ...],
+    source: str,
+) -> list[dict[str, Any]]:
+    audit_rows = []
+    seen: set[str] = set()
+    accepted_seen: set[str] = set()
+    allowed = set(allowed_mutation_keys) if allowed_mutation_keys is not None else None
+    locked_effective = _effective_locked_mutations(base_payload, locked_mutations)
+
+    for proposal in proposals:
+        raw_mutations = dict(proposal.mutations)
+        effective_mutations = {**proposal.mutations, **locked_effective}
+        signature = mutation_signature(
+            effective_mutations,
+            ignored_keys=signature_ignored_keys,
+        )
+        accepted = bool(
+            signature
+            and signature in selected_signatures
+            and signature not in accepted_seen
+        )
+        if accepted:
+            accepted_seen.add(signature)
+        reason = _proposal_rejection_reason(
+            proposal=proposal,
+            effective_mutations=effective_mutations,
+            signature=signature,
+            seen=seen,
+            allowed=allowed,
+            excluded_mutation_signatures=excluded_mutation_signatures,
+            base_payload=base_payload,
+            accepted=accepted,
+        )
+        if signature:
+            seen.add(signature)
+        audit_rows.append(
+            {
+                "source": source,
+                "accepted": accepted,
+                "reason": reason,
+                "mutations": raw_mutations,
+                "effective_mutations": effective_mutations,
+                "signature": signature,
+                "signal": proposal.signal,
+                "rationale": proposal.rationale,
+                "priority": proposal.priority,
+            }
+        )
+    return audit_rows
+
+
+def _proposal_rejection_reason(
+    *,
+    proposal: AdvisorProposal,
+    effective_mutations: dict[str, Any],
+    signature: str,
+    seen: set[str],
+    allowed: set[str] | None,
+    excluded_mutation_signatures: set[str],
+    base_payload: dict[str, Any],
+    accepted: bool,
+) -> str:
+    if accepted:
+        return "accepted"
+    if allowed is not None and any(key not in allowed for key in proposal.mutations):
+        return "mutation key is not allowed"
+    if not signature:
+        return "mutation has no effective changed keys"
+    if signature in seen:
+        return "duplicate within proposal batch"
+    if signature in excluded_mutation_signatures:
+        return "mutation signature was already tried"
+    if not _is_valid_variant_mutation(base_payload, effective_mutations):
+        return "mutation produces invalid config"
+    return "not selected because requested variant limit was reached"
+
+
 def _is_valid_variant_mutation(
     base_payload: dict[str, Any],
     mutations: dict[str, Any],
@@ -730,6 +925,7 @@ def _write_manifest(
     llm_model: str | None,
     llm_strict: bool,
     fallback: dict[str, Any],
+    planner_audit: dict[str, Any],
 ) -> None:
     payload = {
         "kind": "advisor_bundle",
@@ -751,6 +947,7 @@ def _write_manifest(
             "llm_model": llm_model,
             "llm_strict": llm_strict,
             "fallback": fallback,
+            "planner_audit": planner_audit,
             "fixed_mutations": fixed_mutations,
             "allowed_mutation_keys": list(allowed_mutation_keys)
             if allowed_mutation_keys is not None
@@ -799,6 +996,59 @@ def _write_manifest(
             for variant in variants
         ],
         "best_variant": best_variant.index if best_variant is not None else None,
+    }
+    manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _write_exhausted_manifest(
+    *,
+    manifest_path: Path,
+    project_root: Path,
+    bundle_dir: Path,
+    mode: str,
+    baseline_run_id: str,
+    baseline_run_dir: Path,
+    diagnosis: RunDiagnosis,
+    fixed_mutations: dict[str, Any],
+    allowed_mutation_keys: tuple[str, ...] | None,
+    excluded_mutation_signatures: set[str],
+    require_eval_score: bool,
+    planner: str,
+    llm_provider: str | None,
+    llm_model: str | None,
+    llm_strict: bool,
+    fallback: dict[str, Any],
+    planner_audit: dict[str, Any],
+) -> None:
+    payload = {
+        "kind": "advisor_bundle",
+        "created_at": _utc_now_iso(),
+        "mode": mode,
+        "status": "exhausted",
+        "bundle": str(_relative_to(project_root, bundle_dir)),
+        "baseline": {
+            "run_id": baseline_run_id,
+            "run_dir": str(_relative_to(project_root, baseline_run_dir)),
+            "health": diagnosis.health,
+            "trend": diagnosis.analysis.learning.trend,
+        },
+        "protocol": {
+            "planner": planner,
+            "llm_provider": llm_provider,
+            "llm_model": llm_model,
+            "llm_strict": llm_strict,
+            "fallback": fallback,
+            "planner_audit": planner_audit,
+            "fixed_mutations": fixed_mutations,
+            "allowed_mutation_keys": list(allowed_mutation_keys)
+            if allowed_mutation_keys is not None
+            else None,
+            "excluded_mutation_signatures": sorted(excluded_mutation_signatures),
+            "require_eval_score": require_eval_score,
+        },
+        "variants": [],
+        "best_variant": None,
+        "stop_reason": "proposal space exhausted",
     }
     manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 

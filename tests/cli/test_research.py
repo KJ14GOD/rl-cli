@@ -115,6 +115,13 @@ def test_research_command_supports_mock_llm_planner(monkeypatch) -> None:
         assert manifest["protocol"]["planner"] == "llm"
         assert manifest["protocol"]["llm_provider"] == "mock"
         assert manifest["protocol"]["llm_model"] == "mock-model"
+        advisor_manifest = json.loads(
+            (Path("bossfight") / manifest["rounds"][0]["advisor_manifest"]).read_text(
+                encoding="utf-8"
+            )
+        )
+        assert advisor_manifest["protocol"]["fallback"]["used"] is True
+        assert advisor_manifest["protocol"]["fallback"]["rules_filled"] == 3
 
 
 def _write_fake_run(run_dir: Path) -> None:

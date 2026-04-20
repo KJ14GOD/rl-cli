@@ -18,6 +18,7 @@ class LLMPlannerError(Exception):
 
 LLM_DEFAULT_PROVIDER = "openai"
 LLM_DEFAULT_MODEL = "gpt-5.4-mini"
+LLM_SUPPORTED_PROVIDERS = ("openai", "ollama", "mock")
 LLM_ALLOWED_MUTATION_KEYS = (
     "seed",
     "device",
@@ -51,6 +52,12 @@ class LLMProposal:
     priority: str
 
 
+@dataclass(frozen=True)
+class LLMPlannerResult:
+    proposals: list[LLMProposal]
+    audit: dict[str, Any]
+
+
 def generate_llm_proposals(
     *,
     provider: str,
@@ -64,6 +71,33 @@ def generate_llm_proposals(
     signature_ignored_keys: tuple[str, ...],
     variants: int,
 ) -> list[LLMProposal]:
+    return generate_llm_plan(
+        provider=provider,
+        model=model,
+        project_root=project_root,
+        base_payload=base_payload,
+        diagnosis=diagnosis,
+        allowed_mutation_keys=allowed_mutation_keys,
+        locked_mutations=locked_mutations,
+        excluded_mutation_signatures=excluded_mutation_signatures,
+        signature_ignored_keys=signature_ignored_keys,
+        variants=variants,
+    ).proposals
+
+
+def generate_llm_plan(
+    *,
+    provider: str,
+    model: str,
+    project_root: Path,
+    base_payload: dict[str, Any],
+    diagnosis: RunDiagnosis,
+    allowed_mutation_keys: tuple[str, ...],
+    locked_mutations: dict[str, Any],
+    excluded_mutation_signatures: set[str],
+    signature_ignored_keys: tuple[str, ...],
+    variants: int,
+) -> LLMPlannerResult:
     context = _build_context(
         base_payload=base_payload,
         diagnosis=diagnosis,
@@ -80,7 +114,11 @@ def generate_llm_proposals(
         context=context,
         allowed_mutation_keys=allowed_mutation_keys,
     )
-    return _parse_proposals(payload, allowed_mutation_keys=allowed_mutation_keys)
+    proposals, audit = _parse_proposals_with_audit(
+        payload,
+        allowed_mutation_keys=allowed_mutation_keys,
+    )
+    return LLMPlannerResult(proposals=proposals, audit=audit)
 
 
 def _call_provider(
@@ -101,8 +139,16 @@ def _call_provider(
             context=context,
             allowed_mutation_keys=allowed_mutation_keys,
         )
+    if normalized == "ollama":
+        return _ollama_response(
+            model=model,
+            project_root=project_root,
+            context=context,
+            allowed_mutation_keys=allowed_mutation_keys,
+        )
     raise LLMPlannerError(
-        f"Unsupported LLM provider '{provider}'. Supported providers: openai, mock."
+        f"Unsupported LLM provider '{provider}'. Supported providers: "
+        f"{', '.join(LLM_SUPPORTED_PROVIDERS)}."
     )
 
 
@@ -169,13 +215,70 @@ def _openai_response(
         raise LLMPlannerError("OpenAI planner response was not valid JSON.") from exc
 
     text = _extract_openai_text(raw)
+    return _parse_json_object_text(text, provider_label="OpenAI")
+
+
+def _ollama_response(
+    *,
+    model: str,
+    project_root: Path,
+    context: dict[str, Any],
+    allowed_mutation_keys: tuple[str, ...],
+) -> dict[str, Any]:
+    base_url = (
+        get_env_value("OLLAMA_BASE_URL", project_root=project_root)
+        or "http://localhost:11434"
+    ).rstrip("/")
+    timeout_raw = get_env_value("RLX_LLM_TIMEOUT", project_root=project_root, default="300")
+    timeout = _parse_timeout(timeout_raw)
+    user_prompt = _ollama_user_prompt(
+        context=context,
+        allowed_mutation_keys=allowed_mutation_keys,
+    )
+    request_payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": _system_prompt(),
+            },
+            {
+                "role": "user",
+                "content": user_prompt,
+            },
+        ],
+        "stream": False,
+        "format": "json",
+        "think": False,
+        "options": {
+            "temperature": 0.1,
+            "num_predict": 1200,
+        },
+    }
+    request = urllib.request.Request(
+        f"{base_url}/api/chat",
+        data=json.dumps(request_payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
     try:
-        parsed = json.loads(text)
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise LLMPlannerError(f"Ollama planner request failed: HTTP {exc.code}: {body}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise LLMPlannerError(
+            "Ollama planner request failed. Make sure Ollama is running, the model "
+            f"`{model}` is pulled, and OLLAMA_BASE_URL is correct. "
+            f"Waited {timeout:g}s: {exc}"
+        ) from exc
     except json.JSONDecodeError as exc:
-        raise LLMPlannerError("OpenAI planner response text was not valid proposal JSON.") from exc
-    if not isinstance(parsed, dict):
-        raise LLMPlannerError("OpenAI planner response must be a JSON object.")
-    return parsed
+        raise LLMPlannerError("Ollama planner response was not valid JSON.") from exc
+
+    text = _extract_ollama_text(raw)
+    return _parse_json_object_text(text, provider_label="Ollama")
 
 
 def _mock_response() -> dict[str, Any]:
@@ -196,18 +299,58 @@ def _parse_proposals(
     *,
     allowed_mutation_keys: tuple[str, ...],
 ) -> list[LLMProposal]:
+    proposals, _audit = _parse_proposals_with_audit(
+        payload,
+        allowed_mutation_keys=allowed_mutation_keys,
+    )
+    return proposals
+
+
+def _parse_proposals_with_audit(
+    payload: dict[str, Any],
+    *,
+    allowed_mutation_keys: tuple[str, ...],
+) -> tuple[list[LLMProposal], dict[str, Any]]:
     raw_proposals = payload.get("proposals")
     if not isinstance(raw_proposals, list):
         raise LLMPlannerError("LLM planner response must contain a proposals list.")
 
     allowed = set(allowed_mutation_keys)
     proposals: list[LLMProposal] = []
-    for item in raw_proposals:
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_proposals, start=1):
         if not isinstance(item, dict):
+            rejected.append(
+                {
+                    "index": index,
+                    "reason": "proposal is not an object",
+                    "raw": item,
+                }
+            )
             continue
-        mutations = _changes_to_mutations(item.get("changes"), allowed=allowed)
+        mutations, rejected_changes = _changes_to_mutations_with_audit(
+            item.get("changes"),
+            allowed=allowed,
+        )
         if not mutations:
+            rejected.append(
+                {
+                    "index": index,
+                    "reason": "proposal had no valid allowed changes",
+                    "raw": item,
+                    "rejected_changes": rejected_changes,
+                }
+            )
             continue
+        accepted.append(
+            {
+                "index": index,
+                "mutations": mutations,
+                "raw": item,
+                "rejected_changes": rejected_changes,
+            }
+        )
         proposals.append(
             LLMProposal(
                 mutations=mutations,
@@ -220,26 +363,73 @@ def _parse_proposals(
             )
         )
 
-    if not proposals:
-        raise LLMPlannerError("LLM planner did not return any valid proposals.")
-    return proposals
+    audit = {
+        "raw_count": len(raw_proposals),
+        "accepted_count": len(accepted),
+        "rejected_count": len(rejected),
+        "accepted": accepted,
+        "rejected": rejected,
+    }
+    return proposals, audit
 
 
 def _changes_to_mutations(value: Any, *, allowed: set[str]) -> dict[str, Any]:
+    mutations, _rejected = _changes_to_mutations_with_audit(value, allowed=allowed)
+    return mutations
+
+
+def _changes_to_mutations_with_audit(
+    value: Any,
+    *,
+    allowed: set[str],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if not isinstance(value, list):
-        return {}
+        return {}, [{"reason": "changes is not a list", "raw": value}]
     mutations: dict[str, Any] = {}
-    for item in value:
+    rejected: list[dict[str, Any]] = []
+    for index, item in enumerate(value, start=1):
         if not isinstance(item, dict):
+            rejected.append(
+                {
+                    "index": index,
+                    "reason": "change is not an object",
+                    "raw": item,
+                }
+            )
             continue
         key = item.get("key")
-        if not isinstance(key, str) or key not in allowed:
+        if not isinstance(key, str):
+            rejected.append(
+                {
+                    "index": index,
+                    "reason": "change key is missing or not a string",
+                    "raw": item,
+                }
+            )
+            continue
+        if key not in allowed:
+            rejected.append(
+                {
+                    "index": index,
+                    "reason": "change key is not allowed",
+                    "key": key,
+                    "raw": item,
+                }
+            )
             continue
         mutation_value = item.get("value")
         if not _is_supported_value(mutation_value):
+            rejected.append(
+                {
+                    "index": index,
+                    "reason": "change value type is not supported",
+                    "key": key,
+                    "raw": item,
+                }
+            )
             continue
         mutations[key] = mutation_value
-    return mutations
+    return mutations, rejected
 
 
 def _is_supported_value(value: Any) -> bool:
@@ -372,6 +562,39 @@ def _system_prompt() -> str:
     )
 
 
+def _ollama_user_prompt(
+    *,
+    context: dict[str, Any],
+    allowed_mutation_keys: tuple[str, ...],
+) -> str:
+    response_shape = {
+        "proposals": [
+            {
+                "changes": [
+                    {
+                        "key": "one allowed mutation key",
+                        "value": "number, string, boolean, or numeric array",
+                    }
+                ],
+                "signal": "short artifact-grounded signal",
+                "rationale": "short reason this PPO variant is worth testing",
+                "priority": "high, medium, or low",
+            }
+        ]
+    }
+    return "\n\n".join(
+        [
+            "Return JSON only. Do not include markdown, prose, or chain-of-thought.",
+            "Use this exact top-level shape:",
+            json.dumps(response_shape, indent=2),
+            "Allowed mutation keys:",
+            json.dumps(list(allowed_mutation_keys), indent=2),
+            "Run context:",
+            json.dumps(context, indent=2, sort_keys=True),
+        ]
+    )
+
+
 def _proposal_schema(allowed_mutation_keys: tuple[str, ...]) -> dict[str, Any]:
     value_schema = {
         "anyOf": [
@@ -447,6 +670,48 @@ def _extract_openai_text(payload: dict[str, Any]) -> str:
     if not text:
         raise LLMPlannerError("OpenAI planner response did not contain output text.")
     return text
+
+
+def _extract_ollama_text(payload: dict[str, Any]) -> str:
+    message = payload.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+
+    response = payload.get("response")
+    if isinstance(response, str) and response.strip():
+        return response.strip()
+
+    raise LLMPlannerError("Ollama planner response did not contain message content.")
+
+
+def _parse_json_object_text(text: str, *, provider_label: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = _parse_json_object_substring(text, provider_label=provider_label)
+    if not isinstance(parsed, dict):
+        raise LLMPlannerError(f"{provider_label} planner response must be a JSON object.")
+    return parsed
+
+
+def _parse_json_object_substring(text: str, *, provider_label: str) -> dict[str, Any]:
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        raise LLMPlannerError(
+            f"{provider_label} planner response text was not valid proposal JSON."
+        )
+    try:
+        parsed = json.loads(text[start : end + 1])
+    except json.JSONDecodeError as exc:
+        raise LLMPlannerError(
+            f"{provider_label} planner response text was not valid proposal JSON."
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise LLMPlannerError(f"{provider_label} planner response must be a JSON object.")
+    return parsed
 
 
 def _clean_text(value: Any, *, default: str) -> str:

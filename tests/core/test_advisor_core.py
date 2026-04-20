@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 from rlx.cli import app
 from rlx.config import load_config
-from rlx.core.advisor import run_advisor
+from rlx.core.advisor import AdvisorError, run_advisor
 
 runner = CliRunner()
 
@@ -107,7 +107,197 @@ def test_advisor_llm_planner_validates_allowed_config_mutations(monkeypatch) -> 
         assert manifest["protocol"]["planner"] == "llm"
         assert manifest["protocol"]["llm_provider"] == "mock"
         assert manifest["protocol"]["llm_model"] == "mock-model"
+        assert manifest["protocol"]["llm_strict"] is False
+        assert manifest["protocol"]["fallback"]["used"] is False
+        response_audit = manifest["protocol"]["planner_audit"]["llm_response"]
+        assert response_audit["raw_count"] == 2
+        assert response_audit["accepted_count"] == 1
+        assert response_audit["rejected_count"] == 1
+        assert response_audit["rejected"][0]["rejected_changes"][0]["key"] == "env.id"
+        assert manifest["variants"][0]["proposal_source"] == "llm"
         assert "env.id" not in manifest["variants"][0]["mutations"]
+
+
+def test_advisor_llm_fills_missing_variants_with_rules(monkeypatch) -> None:
+    with runner.isolated_filesystem():
+        init_result = runner.invoke(app, ["init", "bossfight"])
+        assert init_result.exit_code == 0
+
+        run_dir = Path("bossfight/runs/tiny_advisor_001")
+        _write_fake_run(
+            run_dir=run_dir,
+            run_name="tiny_advisor",
+            rewards=(25.0, 26.0, 26.5),
+        )
+        monkeypatch.setenv(
+            "RLX_LLM_MOCK_RESPONSE",
+            json.dumps(
+                {
+                    "proposals": [
+                        {
+                            "changes": [{"key": "algo.gamma", "value": 0.98}],
+                            "signal": "mock llm signal",
+                            "rationale": "Mock LLM proposes one safe PPO mutation.",
+                            "priority": "high",
+                        }
+                    ]
+                }
+            ),
+        )
+
+        result = run_advisor(
+            "tiny_advisor_001",
+            variants=2,
+            planner="llm",
+            llm_provider="mock",
+            llm_model="mock-model",
+            cwd=Path("bossfight"),
+        )
+
+        assert len(result.variants) == 2
+        assert [variant.proposal_source for variant in result.variants] == ["llm", "rules"]
+
+        manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+        fallback = manifest["protocol"]["fallback"]
+        assert fallback["used"] is True
+        assert fallback["mode"] == "fill_missing_with_rules"
+        assert fallback["llm_valid"] == 1
+        assert fallback["rules_filled"] == 1
+        assert manifest["protocol"]["planner_audit"]["llm_response"]["accepted_count"] == 1
+        assert manifest["protocol"]["planner_audit"]["rule_fill_count"] == 1
+        assert [variant["proposal_source"] for variant in manifest["variants"]] == [
+            "llm",
+            "rules",
+        ]
+
+
+def test_advisor_ollama_provider_uses_local_chat_api(monkeypatch) -> None:
+    with runner.isolated_filesystem():
+        init_result = runner.invoke(app, ["init", "bossfight"])
+        assert init_result.exit_code == 0
+
+        run_dir = Path("bossfight/runs/tiny_advisor_001")
+        _write_fake_run(
+            run_dir=run_dir,
+            run_name="tiny_advisor",
+            rewards=(25.0, 26.0, 26.5),
+        )
+        calls = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps(
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps(
+                                {
+                                    "proposals": [
+                                        {
+                                            "changes": [
+                                                {
+                                                    "key": "algo.learning_rate",
+                                                    "value": 0.0002,
+                                                }
+                                            ],
+                                            "signal": "local ollama signal",
+                                            "rationale": (
+                                                "Local model proposes a smaller PPO step."
+                                            ),
+                                            "priority": "high",
+                                        }
+                                    ]
+                                }
+                            ),
+                        },
+                        "done": True,
+                    }
+                ).encode("utf-8")
+
+        def fake_urlopen(request, timeout):
+            calls.append((request, timeout))
+            return FakeResponse()
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+        result = run_advisor(
+            "tiny_advisor_001",
+            variants=1,
+            planner="llm",
+            llm_provider="ollama",
+            llm_model="qwen3:8b",
+            cwd=Path("bossfight"),
+        )
+
+        assert len(result.variants) == 1
+        assert result.variants[0].proposal_source == "llm"
+        assert result.variants[0].mutations == {"algo.learning_rate": 0.0002}
+
+        request, timeout = calls[0]
+        assert request.full_url == "http://localhost:11434/api/chat"
+        assert timeout == 300.0
+        payload = json.loads(request.data.decode("utf-8"))
+        assert payload["model"] == "qwen3:8b"
+        assert payload["stream"] is False
+        assert payload["format"] == "json"
+        assert payload["think"] is False
+        assert payload["options"]["num_predict"] == 1200
+        assert "Allowed mutation keys" in payload["messages"][1]["content"]
+
+        manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+        assert manifest["protocol"]["planner"] == "llm"
+        assert manifest["protocol"]["llm_provider"] == "ollama"
+        assert manifest["protocol"]["llm_model"] == "qwen3:8b"
+        assert manifest["variants"][0]["proposal_source"] == "llm"
+
+
+def test_advisor_llm_strict_fails_when_variants_are_missing(monkeypatch) -> None:
+    with runner.isolated_filesystem():
+        init_result = runner.invoke(app, ["init", "bossfight"])
+        assert init_result.exit_code == 0
+
+        run_dir = Path("bossfight/runs/tiny_advisor_001")
+        _write_fake_run(
+            run_dir=run_dir,
+            run_name="tiny_advisor",
+            rewards=(25.0, 26.0, 26.5),
+        )
+        monkeypatch.setenv(
+            "RLX_LLM_MOCK_RESPONSE",
+            json.dumps(
+                {
+                    "proposals": [
+                        {
+                            "changes": [{"key": "algo.gamma", "value": 0.98}],
+                            "signal": "mock llm signal",
+                            "rationale": "Mock LLM proposes one safe PPO mutation.",
+                            "priority": "high",
+                        }
+                    ]
+                }
+            ),
+        )
+
+        try:
+            run_advisor(
+                "tiny_advisor_001",
+                variants=2,
+                planner="llm",
+                llm_provider="mock",
+                llm_model="mock-model",
+                llm_strict=True,
+                cwd=Path("bossfight"),
+            )
+        except AdvisorError as exc:
+            assert "strict mode" in str(exc)
+        else:
+            raise AssertionError("Expected strict LLM advisor to fail.")
 
 
 def _write_fake_run(
