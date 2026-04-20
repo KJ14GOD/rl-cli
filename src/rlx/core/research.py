@@ -23,6 +23,9 @@ class ResearchError(Exception):
 
 
 OBJECTIVE_METRIC = "eval_mean_reward"
+RESEARCH_PROTOCOL_VERSION = 2
+EXECUTED_SCORE_MODE = "standalone_eval_latest_checkpoint"
+DRY_RUN_SCORE_MODE = "existing_eval_or_rollout_signal"
 ALLOWED_RESEARCH_MUTATION_KEYS = LLM_ALLOWED_MUTATION_KEYS
 SIGNATURE_IGNORED_KEYS = (
     "algo.total_timesteps",
@@ -92,6 +95,7 @@ def run_research(
     planner: str = "rules",
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    llm_strict: bool = False,
     cwd: Path | None = None,
 ) -> ResearchResult:
     if rounds < 1:
@@ -169,6 +173,7 @@ def run_research(
         planner=planner_name,
         llm_provider=resolved_llm_provider if planner_name == "llm" else None,
         llm_model=resolved_llm_model if planner_name == "llm" else None,
+        llm_strict=llm_strict,
     )
 
     return _continue_research(
@@ -204,6 +209,7 @@ def resume_research(
     planner: str | None = None,
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    llm_strict: bool | None = None,
 ) -> ResearchResult:
     manifest_path = _resolve_research_manifest(resume_path)
     try:
@@ -239,7 +245,12 @@ def resume_research(
         min_improvement if min_improvement is not None else settings.get("min_improvement"),
         field_name="min_improvement",
     )
-    if planner is not None or llm_provider is not None or llm_model is not None:
+    if (
+        planner is not None
+        or llm_provider is not None
+        or llm_model is not None
+        or llm_strict is not None
+    ):
         raise ResearchError(
             "Resumed research keeps the original planner/provider/model. "
             "Start a new research bundle to change LLM settings."
@@ -330,6 +341,7 @@ def _continue_research(
     planner = _planner_from_protocol(protocol)
     llm_provider = _maybe_str(protocol.get("llm_provider")) or LLM_DEFAULT_PROVIDER
     llm_model = _maybe_str(protocol.get("llm_model")) or LLM_DEFAULT_MODEL
+    llm_strict = bool(protocol.get("llm_strict", False))
 
     for round_index in range(len(research_rounds) + 1, target_rounds + 1):
         try:
@@ -345,6 +357,7 @@ def _continue_research(
                 planner=planner,
                 llm_provider=llm_provider,
                 llm_model=llm_model,
+                llm_strict=llm_strict,
                 cwd=project_root,
             )
         except AdvisorError as exc:
@@ -568,10 +581,15 @@ def _build_protocol(
     planner: str,
     llm_provider: str | None,
     llm_model: str | None,
+    llm_strict: bool,
 ) -> dict[str, Any]:
+    score_mode = EXECUTED_SCORE_MODE if require_eval_score else DRY_RUN_SCORE_MODE
     return {
+        "version": RESEARCH_PROTOCOL_VERSION,
+        "score_mode": score_mode,
         "objective": {
             "metric": OBJECTIVE_METRIC,
+            "higher_is_better": True,
             "score_source": (
                 "standalone latest-checkpoint eval when executed; existing eval/rollout "
                 "signals for dry-run planning"
@@ -586,6 +604,7 @@ def _build_protocol(
         "planner": planner,
         "llm_provider": llm_provider,
         "llm_model": llm_model,
+        "llm_strict": llm_strict,
         "locked_mutations": locked_mutations,
         "signature_ignored_keys": list(SIGNATURE_IGNORED_KEYS),
         "duplicate_guard": "exact mutation signatures are not repeated across rounds",
@@ -693,6 +712,10 @@ def _build_report(payload: dict[str, Any]) -> str:
         f"# RLCLI Research Report: {payload['initial_run_id']}",
         "",
         f"- Mode: {payload['mode']}",
+        (
+            f"- Protocol: v{payload.get('protocol', {}).get('version', 'unknown')} "
+            f"({payload.get('protocol', {}).get('score_mode', 'unknown score mode')})"
+        ),
         f"- Stop reason: {payload['stop_reason']}",
         f"- Champion: {champion['run_id']}",
         f"- Champion score: {_fmt_score(champion['score'], champion['score_source'])}",

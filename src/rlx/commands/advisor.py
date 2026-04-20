@@ -48,6 +48,12 @@ LLM_MODEL_OPTION = typer.Option(
     help=f"LLM model for --planner llm. Defaults to {LLM_DEFAULT_MODEL}.",
 )
 
+LLM_STRICT_OPTION = typer.Option(
+    False,
+    "--llm-strict",
+    help="Fail if the LLM cannot produce all requested valid variants.",
+)
+
 
 def advisor_command(
     run_ref: str = RUN_REF_ARGUMENT,
@@ -57,6 +63,7 @@ def advisor_command(
     planner: str = PLANNER_OPTION,
     llm_provider: str | None = LLM_PROVIDER_OPTION,
     llm_model: str | None = LLM_MODEL_OPTION,
+    llm_strict: bool = LLM_STRICT_OPTION,
 ) -> None:
     """Create grounded next-experiment variants from one completed run.
 
@@ -77,6 +84,7 @@ def advisor_command(
             planner=planner,
             llm_provider=llm_provider,
             llm_model=llm_model,
+            llm_strict=llm_strict,
         )
     except AdvisorError as exc:
         console.print(f"[error]{exc}[/error]")

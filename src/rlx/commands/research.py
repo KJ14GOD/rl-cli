@@ -71,6 +71,12 @@ LLM_MODEL_OPTION = typer.Option(
     help=f"LLM model for --planner llm. Defaults to {LLM_DEFAULT_MODEL}.",
 )
 
+LLM_STRICT_OPTION = typer.Option(
+    False,
+    "--llm-strict",
+    help="Fail if the LLM cannot produce all requested valid variants.",
+)
+
 
 def research_command(
     run_ref: str | None = RUN_REF_ARGUMENT,
@@ -83,6 +89,7 @@ def research_command(
     planner: str | None = PLANNER_OPTION,
     llm_provider: str | None = LLM_PROVIDER_OPTION,
     llm_model: str | None = LLM_MODEL_OPTION,
+    llm_strict: bool = LLM_STRICT_OPTION,
 ) -> None:
     """Run bounded advisor loops and promote the best-scoring variant.
 
@@ -109,6 +116,7 @@ def research_command(
                 planner=planner,
                 llm_provider=llm_provider,
                 llm_model=llm_model,
+                llm_strict=llm_strict if llm_strict else None,
             )
         else:
             if run_ref is None:
@@ -123,6 +131,7 @@ def research_command(
                 planner=planner or "rules",
                 llm_provider=llm_provider,
                 llm_model=llm_model,
+                llm_strict=llm_strict,
             )
     except ResearchError as exc:
         console.print(f"[error]{exc}[/error]")

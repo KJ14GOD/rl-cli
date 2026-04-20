@@ -37,6 +37,7 @@ class AdvisorProposal:
     signal: str
     rationale: str
     priority: str
+    source: str = "rules"
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class AdvisorVariantResult:
     signal: str
     rationale: str
     priority: str
+    proposal_source: str
     status: str
     run_id: str | None
     run_dir: Path | None
@@ -86,6 +88,7 @@ def run_advisor(
     planner: str = "rules",
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    llm_strict: bool = False,
     cwd: Path | None = None,
 ) -> AdvisorResult:
     if variants < 1:
@@ -139,31 +142,19 @@ def run_advisor(
     if planner_name == "llm" and resolved_allowed_keys is None:
         resolved_allowed_keys = LLM_ALLOWED_MUTATION_KEYS
 
-    try:
-        source_proposals = _planner_proposals(
-            planner=planner_name,
-            base_payload=base_payload,
-            diagnosis=diagnosis,
-            project_root=project_root,
-            variants=variants,
-            locked_mutations=fixed_mutations,
-            allowed_mutation_keys=resolved_allowed_keys,
-            excluded_mutation_signatures=excluded_mutation_signatures or set(),
-            signature_ignored_keys=signature_ignored_keys,
-            llm_provider=resolved_llm_provider,
-            llm_model=resolved_llm_model,
-        )
-    except LLMPlannerError as exc:
-        raise AdvisorError(str(exc)) from exc
-
-    proposals = _select_proposals(
-        source_proposals,
-        limit=variants,
+    proposals, fallback = _select_planner_proposals(
+        planner=planner_name,
         base_payload=base_payload,
+        diagnosis=diagnosis,
+        project_root=project_root,
+        variants=variants,
         locked_mutations=fixed_mutations,
         allowed_mutation_keys=resolved_allowed_keys,
         excluded_mutation_signatures=excluded_mutation_signatures or set(),
         signature_ignored_keys=signature_ignored_keys,
+        llm_provider=resolved_llm_provider,
+        llm_model=resolved_llm_model,
+        llm_strict=llm_strict,
     )
     if not proposals:
         raise AdvisorError("Advisor could not create any valid variant proposals.")
@@ -191,6 +182,7 @@ def run_advisor(
             signal=proposal.signal,
             rationale=proposal.rationale,
             priority=proposal.priority,
+            proposal_source=proposal.source,
             status="proposed",
             run_id=None,
             run_dir=None,
@@ -233,6 +225,8 @@ def run_advisor(
         planner=planner_name,
         llm_provider=resolved_llm_provider if planner_name == "llm" else None,
         llm_model=resolved_llm_model if planner_name == "llm" else None,
+        llm_strict=llm_strict,
+        fallback=fallback,
     )
     _write_plan(
         plan_path=plan_path,
@@ -274,7 +268,7 @@ def _resolve_llm_setting(
     return get_env_value(env_name, project_root=project_root, default=default) or default
 
 
-def _planner_proposals(
+def _select_planner_proposals(
     *,
     planner: str,
     base_payload: dict[str, Any],
@@ -287,31 +281,108 @@ def _planner_proposals(
     signature_ignored_keys: tuple[str, ...],
     llm_provider: str,
     llm_model: str,
-) -> list[AdvisorProposal]:
-    if planner == "rules":
-        return _build_proposals(base_payload, diagnosis)
+    llm_strict: bool,
+) -> tuple[list[AdvisorProposal], dict[str, Any]]:
+    fallback = {
+        "used": False,
+        "mode": "none",
+        "reason": None,
+        "requested": variants,
+        "llm_valid": None,
+        "rules_filled": 0,
+    }
 
-    proposals = generate_llm_proposals(
-        provider=llm_provider,
-        model=llm_model,
-        project_root=project_root,
-        base_payload=base_payload,
-        diagnosis=diagnosis,
-        allowed_mutation_keys=allowed_mutation_keys or LLM_ALLOWED_MUTATION_KEYS,
-        locked_mutations=locked_mutations,
-        excluded_mutation_signatures=excluded_mutation_signatures,
-        signature_ignored_keys=signature_ignored_keys,
-        variants=variants,
-    )
-    return [
+    if planner == "rules":
+        return (
+            _select_proposals(
+                _build_proposals(base_payload, diagnosis),
+                limit=variants,
+                base_payload=base_payload,
+                locked_mutations=locked_mutations,
+                allowed_mutation_keys=allowed_mutation_keys,
+                excluded_mutation_signatures=excluded_mutation_signatures,
+                signature_ignored_keys=signature_ignored_keys,
+            ),
+            fallback,
+        )
+
+    try:
+        llm_raw = generate_llm_proposals(
+            provider=llm_provider,
+            model=llm_model,
+            project_root=project_root,
+            base_payload=base_payload,
+            diagnosis=diagnosis,
+            allowed_mutation_keys=allowed_mutation_keys or LLM_ALLOWED_MUTATION_KEYS,
+            locked_mutations=locked_mutations,
+            excluded_mutation_signatures=excluded_mutation_signatures,
+            signature_ignored_keys=signature_ignored_keys,
+            variants=variants,
+        )
+    except LLMPlannerError as exc:
+        raise AdvisorError(str(exc)) from exc
+
+    llm_source = [
         AdvisorProposal(
             mutations=item.mutations,
             signal=item.signal,
             rationale=item.rationale,
             priority=item.priority,
+            source="llm",
         )
-        for item in proposals
+        for item in llm_raw
     ]
+    selected = _select_proposals(
+        llm_source,
+        limit=variants,
+        base_payload=base_payload,
+        locked_mutations=locked_mutations,
+        allowed_mutation_keys=allowed_mutation_keys,
+        excluded_mutation_signatures=excluded_mutation_signatures,
+        signature_ignored_keys=signature_ignored_keys,
+    )
+    fallback["llm_valid"] = len(selected)
+    missing = variants - len(selected)
+    if missing <= 0:
+        return selected, fallback
+
+    if llm_strict:
+        raise AdvisorError(
+            "LLM planner strict mode could not produce enough valid proposals: "
+            f"requested {variants}, valid {len(selected)}."
+        )
+
+    selected_signatures = {
+        signature
+        for signature in (
+            mutation_signature(item.mutations, ignored_keys=signature_ignored_keys)
+            for item in selected
+        )
+        if signature
+    }
+    rule_fill = _select_proposals(
+        _build_proposals(base_payload, diagnosis),
+        limit=missing,
+        base_payload=base_payload,
+        locked_mutations=locked_mutations,
+        allowed_mutation_keys=allowed_mutation_keys,
+        excluded_mutation_signatures=excluded_mutation_signatures | selected_signatures,
+        signature_ignored_keys=signature_ignored_keys,
+    )
+    if rule_fill:
+        fallback.update(
+            {
+                "used": True,
+                "mode": "fill_missing_with_rules",
+                "reason": (
+                    f"LLM produced {len(selected)} valid proposal(s) for "
+                    f"{variants} requested variant(s)."
+                ),
+                "rules_filled": len(rule_fill),
+            }
+        )
+        selected.extend(rule_fill)
+    return selected, fallback
 
 
 def _build_proposals(
@@ -545,6 +616,7 @@ def _select_proposals(
                 signal=proposal.signal,
                 rationale=proposal.rationale,
                 priority=proposal.priority,
+                source=proposal.source,
             )
         )
         if len(selected) >= limit:
@@ -602,6 +674,7 @@ def _execute_variant(
             signal=variant.signal,
             rationale=variant.rationale,
             priority=variant.priority,
+            proposal_source=variant.proposal_source,
             status="completed",
             run_id=run.run_dir.name,
             run_dir=run.run_dir,
@@ -624,6 +697,7 @@ def _execute_variant(
             signal=variant.signal,
             rationale=variant.rationale,
             priority=variant.priority,
+            proposal_source=variant.proposal_source,
             status="failed",
             run_id=None,
             run_dir=None,
@@ -654,6 +728,8 @@ def _write_manifest(
     planner: str,
     llm_provider: str | None,
     llm_model: str | None,
+    llm_strict: bool,
+    fallback: dict[str, Any],
 ) -> None:
     payload = {
         "kind": "advisor_bundle",
@@ -673,6 +749,8 @@ def _write_manifest(
             "planner": planner,
             "llm_provider": llm_provider,
             "llm_model": llm_model,
+            "llm_strict": llm_strict,
+            "fallback": fallback,
             "fixed_mutations": fixed_mutations,
             "allowed_mutation_keys": list(allowed_mutation_keys)
             if allowed_mutation_keys is not None
@@ -706,6 +784,7 @@ def _write_manifest(
                 "signal": variant.signal,
                 "rationale": variant.rationale,
                 "priority": variant.priority,
+                "proposal_source": variant.proposal_source,
                 "status": variant.status,
                 "run_id": variant.run_id,
                 "run_dir": (
@@ -759,6 +838,7 @@ def _write_plan(
         lines.extend(
             [
                 f"- Variant {variant.index:03d}: {mutation_text}",
+                f"  Source: {variant.proposal_source}",
                 f"  Signal: {variant.signal}",
                 f"  Rationale: {variant.rationale}",
                 f"  Status: {variant.status}",
