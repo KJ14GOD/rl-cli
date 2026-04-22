@@ -84,6 +84,12 @@ Optional smoke checks:
 ```bash
 rlx plot cartpole_ppo_001
 rlx analyze cartpole_ppo_001
+rlx report --preview
+rlx report --preview --preview-kind research
+rlx report cartpole_ppo_001
+rlx dashboard --demo --export
+rlx dashboard --export
+rlx dashboard --demo --port 8765
 rlx research cartpole_ppo_001 --rounds 1 --variants 2
 ```
 

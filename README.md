@@ -98,6 +98,19 @@ rlx diagnose cartpole_ppo_001
 rlx suggest cartpole_ppo_001
 ```
 
+Generate local web views and launch the connected app:
+
+```bash
+rlx report --preview --serve
+rlx report --preview --preview-kind research --serve
+rlx dashboard --demo
+rlx dashboard --open
+rlx report cartpole_ppo_001
+rlx report analysis/research/cartpole_ppo_001_research_001
+rlx dashboard
+rlx dashboard --export
+```
+
 Generate next experiment ideas:
 
 ```bash
@@ -253,6 +266,8 @@ rlx eval --run <run_path> --all-checkpoints
 rlx video <checkpoint_path>
 rlx plot <run_a> [run_b ...]
 rlx compare <run_a> <run_b> [run_c ...]
+rlx report <run_or_research_bundle>
+rlx dashboard
 ```
 
 Run management:
@@ -274,6 +289,15 @@ rlx explain-metrics <run>
 rlx diagnose <run>
 rlx suggest <run>
 rlx summarize <target>
+```
+
+Web reports:
+
+```bash
+rlx report <run>
+rlx report <research_bundle>
+rlx dashboard
+rlx dashboard --export
 ```
 
 Advisor and research:
@@ -384,6 +408,58 @@ protocol.planner_audit
 
 That audit records accepted proposals, rejected proposals, repair attempts, and whether
 rule fallback was used.
+
+## Web Reports And Dashboard
+
+`rlx report` writes a local HTML report for a run or research bundle:
+
+```bash
+rlx report --preview --serve
+rlx report --preview --preview-kind research --serve
+rlx report cartpole_ppo_001
+rlx report analysis/research/cartpole_ppo_001_research_001
+```
+
+Outputs:
+
+```text
+analysis/reports/<target>_report_001/
+  index.html
+```
+
+Run reports include interactive metric curves, eval tables, artifact links, config
+values, and metric notes. Research reports include the champion, rounds, candidate
+scores, promotions, and generated scoreboard/progress plots when present.
+
+`rlx dashboard` starts the connected local web app. It serves a browser UI at `/`
+and live JSON data from `/api/project`, `/api/run`, and `/api/research`, so the
+page can refresh after new training, eval, video, or research artifacts appear.
+
+```bash
+rlx dashboard --demo
+rlx dashboard
+rlx dashboard --port 9000
+rlx dashboard --open
+```
+
+The default URL is:
+
+```text
+http://127.0.0.1:8765/
+```
+
+Use `--export` when you only want to write an offline dashboard HTML snapshot and
+exit:
+
+```bash
+rlx dashboard --export
+```
+
+Output:
+
+```text
+analysis/dashboard/index.html
+```
 
 ## LLM Planner Setup
 
@@ -544,4 +620,3 @@ python -m twine upload dist/*
 ```
 
 For the full checklist, see [docs/RELEASE.md](docs/RELEASE.md).
-

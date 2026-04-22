@@ -134,6 +134,43 @@ rlx compare cartpole_ppo_001 cartpole_ppo_002 cartpole_ppo_003
 Compare uses tracked artifacts such as config snapshots, metrics, evals, checkpoints,
 videos, and metadata.
 
+## Web Reports And Dashboard
+
+Generate a static HTML report for a run:
+
+```bash
+rlx report --preview
+rlx report --preview --serve
+rlx report --preview --preview-kind research --serve
+rlx report cartpole_ppo_001
+rlx report runs/cartpole_ppo_001
+```
+
+Generate a static HTML report for a research bundle:
+
+```bash
+rlx report analysis/research/cartpole_ppo_001_research_001
+```
+
+Start the connected local project dashboard. This serves the app at `/` and live
+artifact data under `/api/...`:
+
+```bash
+rlx dashboard --demo
+rlx dashboard
+rlx dashboard --port 9000
+rlx dashboard --open
+```
+
+Write an offline dashboard HTML snapshot without starting a server:
+
+```bash
+rlx dashboard --export
+```
+
+Report output goes under `analysis/reports/`. Dashboard export output goes to
+`analysis/dashboard/index.html`. The served dashboard is the richer connected app.
+
 ## Analysis
 
 Run-level analysis:
@@ -250,4 +287,3 @@ analysis/research/cartpole_ppo_001_research_001/
   scoreboard.png
   progress.png
 ```
-
