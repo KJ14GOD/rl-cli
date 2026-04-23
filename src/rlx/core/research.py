@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from rlx.config import ConfigError, load_config
 from rlx.core.advisor import (
     AdvisorError,
@@ -32,12 +34,24 @@ RESEARCH_PROTOCOL_VERSION = 2
 EXECUTED_SCORE_MODE = "standalone_eval_latest_checkpoint"
 DRY_RUN_SCORE_MODE = "existing_eval_or_rollout_signal"
 ALLOWED_RESEARCH_MUTATION_KEYS = LLM_ALLOWED_MUTATION_KEYS
+MANDATORY_LOCKED_FIELDS = (
+    "env.id",
+    "algo.total_timesteps",
+    "eval.every",
+    "eval.episodes",
+    "eval.deterministic",
+)
 SIGNATURE_IGNORED_KEYS = (
     "algo.total_timesteps",
     "eval.every",
     "eval.episodes",
     "eval.deterministic",
 )
+SUPPORTED_OBJECTIVES = {
+    "maximize eval reward",
+    "maximize eval_mean_reward",
+    "maximize evaluation reward",
+}
 
 
 @dataclass(frozen=True)
@@ -89,34 +103,72 @@ class ResearchResult:
     stop_reason: str
 
 
+@dataclass(frozen=True)
+class ResearchProtocolInput:
+    path: Path
+    raw: dict[str, Any]
+    baseline: str | None
+    objective: str
+    max_rounds: int | None
+    max_variants_per_round: int | None
+    max_timesteps_per_variant: int | None
+    allowed_changes: tuple[str, ...] | None
+    locked_fields: tuple[str, ...]
+    planner: str | None
+    llm_provider: str | None
+    llm_model: str | None
+    llm_strict: bool | None
+    min_improvement: float | None
+
+
 def run_research(
-    run_ref: str,
+    run_ref: str | None,
     *,
-    rounds: int = 3,
-    variants: int = 4,
+    rounds: int | None = None,
+    variants: int | None = None,
     execute: bool = False,
     timesteps: int | None = None,
-    min_improvement: float = 0.0,
-    planner: str = "rules",
+    min_improvement: float | None = None,
+    planner: str | None = None,
     llm_provider: str | None = None,
     llm_model: str | None = None,
     llm_strict: bool = False,
+    protocol_path: str | Path | None = None,
     cwd: Path | None = None,
 ) -> ResearchResult:
-    if rounds < 1:
+    working_dir = (cwd or Path.cwd()).resolve()
+    protocol_input = _load_research_protocol(protocol_path, cwd=working_dir)
+    resolved_run_ref = _resolve_baseline_ref(run_ref, protocol_input)
+    if resolved_run_ref is None:
+        raise ResearchError("Pass a baseline run, or use --protocol with a baseline field.")
+
+    resolved_rounds = rounds or (protocol_input.max_rounds if protocol_input else None) or 3
+    resolved_variants = (
+        variants or (protocol_input.max_variants_per_round if protocol_input else None) or 4
+    )
+    if resolved_rounds < 1:
         raise ResearchError("Research must run at least one round.")
-    if variants < 1:
+    if resolved_variants < 1:
         raise ResearchError("Research must create at least one variant per round.")
     if timesteps is not None and timesteps < 1:
         raise ResearchError("Research timesteps override must be positive.")
-    if min_improvement < 0:
+    resolved_min_improvement = (
+        min_improvement
+        if min_improvement is not None
+        else (protocol_input.min_improvement if protocol_input else None)
+    )
+    if resolved_min_improvement is None:
+        resolved_min_improvement = 0.0
+    if resolved_min_improvement < 0:
         raise ResearchError("Research min improvement must be non-negative.")
-    planner_name = planner.lower()
+    planner_name = (
+        planner or (protocol_input.planner if protocol_input else None) or "rules"
+    ).lower()
     if planner_name not in {"rules", "llm"}:
         raise ResearchError("Research planner must be either 'rules' or 'llm'.")
 
     try:
-        initial_diagnosis = diagnose_run(run_ref, cwd=cwd)
+        initial_diagnosis = diagnose_run(resolved_run_ref, cwd=working_dir)
     except DiagnoseError as exc:
         raise ResearchError(str(exc)) from exc
 
@@ -132,15 +184,18 @@ def run_research(
 
     resolved_llm_provider = _resolve_llm_setting(
         "RLX_LLM_PROVIDER",
-        llm_provider,
+        llm_provider or (protocol_input.llm_provider if protocol_input else None),
         default=LLM_DEFAULT_PROVIDER,
         project_root=project_root,
     )
     resolved_llm_model = _resolve_llm_setting(
         "RLX_LLM_MODEL",
-        llm_model,
+        llm_model or (protocol_input.llm_model if protocol_input else None),
         default=LLM_DEFAULT_MODEL,
         project_root=project_root,
+    )
+    resolved_llm_strict = bool(
+        llm_strict or (protocol_input.llm_strict if protocol_input else False)
     )
 
     bundle_dir = _next_bundle_dir(
@@ -151,13 +206,21 @@ def run_research(
     manifest_path = bundle_dir / "manifest.json"
     report_path = bundle_dir / "report.md"
 
-    budget_timesteps = timesteps or initial_config.algo.total_timesteps
-    locked_mutations = {
-        "algo.total_timesteps": budget_timesteps,
-        "eval.every": initial_config.eval.every,
-        "eval.episodes": initial_config.eval.episodes,
-        "eval.deterministic": initial_config.eval.deterministic,
-    }
+    budget_timesteps = (
+        timesteps
+        or (protocol_input.max_timesteps_per_variant if protocol_input else None)
+        or initial_config.algo.total_timesteps
+    )
+    locked_fields = _locked_fields_for_protocol(protocol_input)
+    locked_mutations = _locked_mutations_for_config(
+        initial_config.model_dump(mode="python"),
+        locked_fields=locked_fields,
+        budget_timesteps=budget_timesteps,
+    )
+    allowed_mutation_keys = _allowed_changes_for_protocol(
+        protocol_input,
+        locked_fields=locked_fields,
+    )
     require_eval_score = execute
     champion_run_id = initial_run.run_id
     if execute:
@@ -172,13 +235,18 @@ def run_research(
 
     protocol = _build_protocol(
         budget_timesteps=budget_timesteps,
-        budget_source="cli override" if timesteps is not None else "baseline config",
+        budget_source=_budget_source(timesteps=timesteps, protocol=protocol_input),
+        max_rounds=resolved_rounds,
+        max_variants_per_round=resolved_variants,
+        allowed_mutation_keys=allowed_mutation_keys,
+        locked_fields=locked_fields,
         locked_mutations=locked_mutations,
         require_eval_score=require_eval_score,
         planner=planner_name,
         llm_provider=resolved_llm_provider if planner_name == "llm" else None,
         llm_model=resolved_llm_model if planner_name == "llm" else None,
-        llm_strict=llm_strict,
+        llm_strict=resolved_llm_strict,
+        protocol_input=protocol_input,
     )
 
     return _continue_research(
@@ -193,14 +261,222 @@ def run_research(
         champion_score=champion_score,
         champion_score_source=champion_score_source,
         execute=execute,
-        target_rounds=rounds,
-        variants=variants,
-        min_improvement=min_improvement,
+        target_rounds=resolved_rounds,
+        variants=resolved_variants,
+        min_improvement=resolved_min_improvement,
         protocol=protocol,
         locked_mutations=locked_mutations,
         research_rounds=[],
         tried_signatures=set(),
     )
+
+
+def _load_research_protocol(
+    path_value: str | Path | None,
+    *,
+    cwd: Path,
+) -> ResearchProtocolInput | None:
+    if path_value is None:
+        return None
+
+    path = Path(path_value).expanduser()
+    if not path.is_absolute():
+        path = (cwd / path).resolve()
+    if not path.is_file():
+        raise ResearchError(f"Research protocol not found: {path}")
+
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ResearchError(f"Could not read research protocol: {path}") from exc
+    except yaml.YAMLError as exc:
+        raise ResearchError(f"Research protocol is not valid YAML: {path}") from exc
+    if not isinstance(payload, dict):
+        raise ResearchError("Research protocol must be a YAML mapping.")
+
+    objective = _coerce_objective(payload.get("objective"))
+    budget = payload.get("budget", {})
+    if budget is None:
+        budget = {}
+    if not isinstance(budget, dict):
+        raise ResearchError("Research protocol budget must be a mapping.")
+
+    return ResearchProtocolInput(
+        path=path,
+        raw=payload,
+        baseline=_optional_str(payload.get("baseline"), field_name="baseline"),
+        objective=objective,
+        max_rounds=_optional_positive_int(budget.get("max_rounds"), field_name="budget.max_rounds"),
+        max_variants_per_round=_optional_positive_int(
+            budget.get("max_variants_per_round"),
+            field_name="budget.max_variants_per_round",
+        ),
+        max_timesteps_per_variant=_optional_positive_int(
+            budget.get("max_timesteps_per_variant"),
+            field_name="budget.max_timesteps_per_variant",
+        ),
+        allowed_changes=_optional_string_tuple(
+            payload.get("allowed_changes"),
+            field_name="allowed_changes",
+        ),
+        locked_fields=_string_tuple(
+            payload.get("locked") or (),
+            field_name="locked",
+        ),
+        planner=_optional_str(payload.get("planner"), field_name="planner"),
+        llm_provider=_optional_str(payload.get("llm_provider"), field_name="llm_provider"),
+        llm_model=_optional_str(payload.get("llm_model"), field_name="llm_model"),
+        llm_strict=_optional_bool(payload.get("llm_strict"), field_name="llm_strict"),
+        min_improvement=_optional_non_negative_float(
+            payload.get("min_improvement"),
+            field_name="min_improvement",
+        ),
+    )
+
+
+def _resolve_baseline_ref(
+    run_ref: str | None,
+    protocol: ResearchProtocolInput | None,
+) -> str | None:
+    if protocol is None:
+        return run_ref
+    if run_ref is None:
+        return protocol.baseline
+    if protocol.baseline and protocol.baseline != run_ref:
+        raise ResearchError(
+            "Protocol baseline does not match the CLI baseline. "
+            "Pass only --protocol, update research.yaml, or use the same baseline."
+        )
+    return run_ref
+
+
+def _coerce_objective(value: Any) -> str:
+    text = "maximize eval reward" if value is None else _optional_str(value, field_name="objective")
+    if text is None:
+        raise ResearchError("Research protocol objective must be a string.")
+    normalized = " ".join(text.lower().strip().split())
+    if normalized not in SUPPORTED_OBJECTIVES:
+        raise ResearchError(
+            "Research protocol objective must be `maximize eval reward` for now."
+        )
+    return normalized
+
+
+def _optional_str(value: Any, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ResearchError(f"Research protocol field `{field_name}` must be a non-empty string.")
+    return value.strip()
+
+
+def _optional_bool(value: Any, *, field_name: str) -> bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ResearchError(f"Research protocol field `{field_name}` must be true or false.")
+    return value
+
+
+def _optional_positive_int(value: Any, *, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ResearchError(f"Research protocol field `{field_name}` must be a positive integer.")
+    return value
+
+
+def _optional_non_negative_float(value: Any, *, field_name: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float) or float(value) < 0:
+        raise ResearchError(f"Research protocol field `{field_name}` must be non-negative.")
+    return float(value)
+
+
+def _optional_string_tuple(value: Any, *, field_name: str) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    return _string_tuple(value, field_name=field_name)
+
+
+def _string_tuple(value: Any, *, field_name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list | tuple):
+        raise ResearchError(f"Research protocol field `{field_name}` must be a list of strings.")
+    result = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ResearchError(
+                f"Research protocol field `{field_name}` must be a list of strings."
+            )
+        result.append(item.strip())
+    return tuple(dict.fromkeys(result))
+
+
+def _locked_fields_for_protocol(protocol: ResearchProtocolInput | None) -> tuple[str, ...]:
+    requested = protocol.locked_fields if protocol is not None else ()
+    return tuple(dict.fromkeys((*MANDATORY_LOCKED_FIELDS, *requested)))
+
+
+def _allowed_changes_for_protocol(
+    protocol: ResearchProtocolInput | None,
+    *,
+    locked_fields: tuple[str, ...],
+) -> tuple[str, ...]:
+    explicit = protocol is not None and protocol.allowed_changes is not None
+    keys = protocol.allowed_changes if explicit else ALLOWED_RESEARCH_MUTATION_KEYS
+    if not explicit:
+        keys = tuple(key for key in keys if key not in set(locked_fields))
+    unsupported = sorted(set(keys) - set(ALLOWED_RESEARCH_MUTATION_KEYS))
+    if unsupported:
+        raise ResearchError(
+            "Research protocol allowed_changes contains unsupported key(s): "
+            + ", ".join(unsupported)
+        )
+    locked_allowed = sorted(set(keys) & set(locked_fields))
+    if explicit and locked_allowed:
+        raise ResearchError(
+            "Research protocol cannot allow changes to locked field(s): "
+            + ", ".join(locked_allowed)
+        )
+    return tuple(keys)
+
+
+def _locked_mutations_for_config(
+    config_payload: dict[str, Any],
+    *,
+    locked_fields: tuple[str, ...],
+    budget_timesteps: int,
+) -> dict[str, Any]:
+    locked: dict[str, Any] = {}
+    for key in locked_fields:
+        if key == "algo.total_timesteps":
+            locked[key] = budget_timesteps
+            continue
+        value = _get_dotted_value(config_payload, key)
+        if value is None:
+            raise ResearchError(f"Research protocol locked field is not in config: {key}")
+        locked[key] = value
+    return locked
+
+
+def _get_dotted_value(payload: dict[str, Any], dotted_key: str) -> Any:
+    current: Any = payload
+    for part in dotted_key.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _budget_source(*, timesteps: int | None, protocol: ResearchProtocolInput | None) -> str:
+    if timesteps is not None:
+        return "cli override"
+    if protocol is not None and protocol.max_timesteps_per_variant is not None:
+        return f"protocol ({protocol.path.name})"
+    return "baseline config"
 
 
 def resume_research(
@@ -607,15 +883,20 @@ def _build_protocol(
     *,
     budget_timesteps: int,
     budget_source: str,
+    max_rounds: int,
+    max_variants_per_round: int,
+    allowed_mutation_keys: tuple[str, ...],
+    locked_fields: tuple[str, ...],
     locked_mutations: dict[str, Any],
     require_eval_score: bool,
     planner: str,
     llm_provider: str | None,
     llm_model: str | None,
     llm_strict: bool,
+    protocol_input: ResearchProtocolInput | None,
 ) -> dict[str, Any]:
     score_mode = EXECUTED_SCORE_MODE if require_eval_score else DRY_RUN_SCORE_MODE
-    return {
+    protocol = {
         "version": RESEARCH_PROTOCOL_VERSION,
         "score_mode": score_mode,
         "objective": {
@@ -628,18 +909,26 @@ def _build_protocol(
             "requires_eval_score": require_eval_score,
         },
         "budget": {
+            "max_rounds": max_rounds,
+            "max_variants_per_round": max_variants_per_round,
             "timesteps_per_variant": budget_timesteps,
             "source": budget_source,
         },
-        "allowed_mutation_keys": list(ALLOWED_RESEARCH_MUTATION_KEYS),
+        "allowed_mutation_keys": list(allowed_mutation_keys),
         "planner": planner,
         "llm_provider": llm_provider,
         "llm_model": llm_model,
         "llm_strict": llm_strict,
+        "locked_fields": list(locked_fields),
         "locked_mutations": locked_mutations,
         "signature_ignored_keys": list(SIGNATURE_IGNORED_KEYS),
         "duplicate_guard": "exact mutation signatures are not repeated across rounds",
     }
+    if protocol_input is not None:
+        protocol["source_protocol"] = str(protocol_input.path)
+        protocol["source_protocol_name"] = protocol_input.path.name
+        protocol["source_protocol_objective"] = protocol_input.objective
+    return protocol
 
 
 def _write_outputs(

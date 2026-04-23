@@ -68,6 +68,52 @@ def test_research_dry_run_creates_research_journal() -> None:
         assert len(signatures) == len(set(signatures))
 
 
+def test_research_protocol_controls_budget_and_mutation_keys() -> None:
+    with runner.isolated_filesystem():
+        init_result = runner.invoke(app, ["init", "bossfight"])
+        assert init_result.exit_code == 0
+
+        _write_fake_run(Path("bossfight/runs/tiny_research_001"))
+        Path("bossfight/research.yaml").write_text(
+            dedent(
+                """
+                objective: maximize eval reward
+                baseline: tiny_research_001
+
+                budget:
+                  max_rounds: 1
+                  max_variants_per_round: 1
+                  max_timesteps_per_variant: 128
+
+                allowed_changes:
+                  - algo.learning_rate
+
+                locked:
+                  - env.id
+                  - algo.total_timesteps
+                  - eval.episodes
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = run_research(None, protocol_path="research.yaml", cwd=Path("bossfight"))
+
+        assert len(result.rounds) == 1
+        assert len(result.rounds[0].variants) == 1
+        manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+        protocol = manifest["protocol"]
+        assert protocol["source_protocol_name"] == "research.yaml"
+        assert protocol["budget"]["max_rounds"] == 1
+        assert protocol["budget"]["max_variants_per_round"] == 1
+        assert protocol["budget"]["timesteps_per_variant"] == 128
+        assert protocol["allowed_mutation_keys"] == ["algo.learning_rate"]
+        assert protocol["locked_mutations"]["env.id"] == "CartPole-v1"
+        assert protocol["locked_mutations"]["algo.total_timesteps"] == 128
+        assert result.rounds[0].variants[0].mutations["algo.total_timesteps"] == 128
+
+
 def test_research_resume_extends_existing_bundle_without_repeats() -> None:
     with runner.isolated_filesystem():
         init_result = runner.invoke(app, ["init", "bossfight"])

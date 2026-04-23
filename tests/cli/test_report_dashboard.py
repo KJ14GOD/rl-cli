@@ -10,6 +10,7 @@ from rlx.core.report import (
     web_app_html,
     web_project_payload,
     web_research_payload,
+    web_run_logs_payload,
     web_run_payload,
 )
 
@@ -78,6 +79,9 @@ def test_dashboard_export_generates_project_html() -> None:
         assert "Experiment Dashboard" in html
         assert "tiny_web_001" in html
         assert "tiny_web_research_001" in html
+        assert "Activity Snapshot" in html
+        assert "dashboard-log-snapshot" in html
+        assert "training finished" in html
 
 
 def test_report_preview_generates_sample_html() -> None:
@@ -129,14 +133,23 @@ def test_connected_dashboard_payloads_read_project_artifacts() -> None:
         shell = web_app_html()
         project_payload = web_project_payload(project)
         run_payload = web_run_payload(project, "tiny_web_001")
+        log_payload = web_run_logs_payload(project, "tiny_web_001", tail=2)
         research_payload = web_research_payload(project, "tiny_web_research_001")
 
         assert "/api/project" in shell
+        assert "/api/logs" in shell
+        assert "app-live-log" in shell
+        assert "app-activity-list" in shell
         assert "app-command-list" in shell
         assert "rlx eval --run" in shell
+        assert "(appState.project && appState.project.runs)" in shell
+        assert "bundles.some((item) => item.bundle === appState.selectedBundle)" in shell
         assert project_payload["runs"][0]["run_id"] == "tiny_web_001"
+        assert project_payload["activity"]["counts"]["completed"] == 1
         assert run_payload["metrics"]["rollout/ep_rew_mean"][-1]["value"] == 52.0
         assert run_payload["artifacts"][0]["href"].startswith("/files/")
+        assert log_payload["run_id"] == "tiny_web_001"
+        assert any("training finished" in line["message"] for line in log_payload["lines"])
         assert research_payload["score_rows"][-1]["run_id"] == "tiny_web_002"
 
 
@@ -149,6 +162,7 @@ def test_connected_dashboard_demo_payloads_are_available() -> None:
 
         assert payload["demo"] is True
         assert payload["runs"][0]["run_id"] == "preview_cartpole_001"
+        assert payload["activity"]["counts"]["completed"] == 3
         assert "rollout/ep_rew_mean" in run_payload["metrics"]
         assert research_payload["score_rows"][0]["role"] == "baseline"
 
@@ -247,6 +261,10 @@ def _write_fake_run(run_dir: Path) -> None:
             indent=2,
         )
         + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "logs" / "train.log").write_text(
+        "training started\ntraining finished\n",
         encoding="utf-8",
     )
 

@@ -53,6 +53,12 @@ RESUME_OPTION = typer.Option(
     help="Path to a research bundle directory or manifest.json to continue.",
 )
 
+PROTOCOL_OPTION = typer.Option(
+    None,
+    "--protocol",
+    help="Path to research.yaml. Supplies baseline, budget, allowed changes, and locked fields.",
+)
+
 PLANNER_OPTION = typer.Option(
     None,
     "--planner",
@@ -89,6 +95,7 @@ def research_command(
     timesteps: int | None = TIMESTEPS_OPTION,
     min_improvement: float | None = MIN_IMPROVEMENT_OPTION,
     resume: str | None = RESUME_OPTION,
+    protocol: str | None = PROTOCOL_OPTION,
     planner: str | None = PLANNER_OPTION,
     llm_provider: str | None = LLM_PROVIDER_OPTION,
     llm_model: str | None = LLM_MODEL_OPTION,
@@ -100,6 +107,7 @@ def research_command(
 
         rlx research cartpole_ppo_001
         rlx research cartpole_ppo_001 --rounds 3 --variants 4
+        rlx research --protocol research.yaml --execute
         rlx research cartpole_ppo_001 --execute --rounds 2 --timesteps 20000
         rlx research cartpole_ppo_001 --planner llm --execute --rounds 3
         rlx research --resume analysis/research/cartpole_ppo_001_research_001 --rounds 5
@@ -109,6 +117,10 @@ def research_command(
         if resume is not None:
             if run_ref is not None:
                 raise ResearchError("Use either a baseline run or --resume, not both.")
+            if protocol is not None:
+                raise ResearchError(
+                    "Resumed research keeps its original protocol; omit --protocol."
+                )
             result = resume_research(
                 resume,
                 rounds=rounds,
@@ -122,19 +134,23 @@ def research_command(
                 llm_strict=llm_strict if llm_strict else None,
             )
         else:
-            if run_ref is None:
-                raise ResearchError("Pass a baseline run, or use --resume with a research bundle.")
+            if run_ref is None and protocol is None:
+                raise ResearchError(
+                    "Pass a baseline run, use --protocol research.yaml, "
+                    "or use --resume with a research bundle."
+                )
             result = run_research(
                 run_ref,
-                rounds=rounds or 3,
-                variants=variants or 4,
+                rounds=rounds,
+                variants=variants,
                 execute=execute,
                 timesteps=timesteps,
-                min_improvement=0.0 if min_improvement is None else min_improvement,
-                planner=planner or "rules",
+                min_improvement=min_improvement,
+                planner=planner,
                 llm_provider=llm_provider,
                 llm_model=llm_model,
                 llm_strict=llm_strict,
+                protocol_path=protocol,
             )
     except ResearchError as exc:
         console.print(f"[error]{exc}[/error]")

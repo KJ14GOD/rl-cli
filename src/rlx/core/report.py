@@ -228,7 +228,17 @@ def web_app_html() -> str:
         </div>
       </div>
       <div class="topbar-panel">
-        <span id="connection-state" class="status-badge">connecting</span>
+        <div class="topbar-meta">
+          <span id="connection-state" class="status-badge">connecting</span>
+          <span id="app-last-updated" class="topbar-timestamp"></span>
+        </div>
+        <select id="app-poll-select" class="select compact-select" title="Auto-refresh interval">
+          <option value="0">Manual</option>
+          <option value="2">Auto · 2s</option>
+          <option value="5">Auto · 5s</option>
+          <option value="15">Auto · 15s</option>
+          <option value="30">Auto · 30s</option>
+        </select>
         <button id="refresh-app" class="app-button primary">Refresh data</button>
       </div>
     </section>
@@ -260,11 +270,42 @@ def web_app_html() -> str:
           </div>
           <div>
             <span>Refresh</span>
-            <strong>manual, no cloud sync</strong>
+            <strong id="project-refresh-mode">manual</strong>
           </div>
         </section>
 
         <section class="stat-grid app-stat-grid" id="app-stats"></section>
+
+        <section class="panel app-panel" data-section="overview runs">
+          <div class="panel-title-row">
+            <div>
+              <p class="eyebrow">Activity</p>
+              <h2>Run Status And Live Logs</h2>
+            </div>
+            <div id="app-activity-context" class="chart-inspector">Polling local artifacts only.</div>
+          </div>
+          <div class="activity-grid">
+            <div>
+              <div class="run-pane-header">
+                <span class="run-pane-label">Run statuses</span>
+                <span class="run-pane-count" id="app-active-count">0</span>
+              </div>
+              <div id="app-activity-list" class="activity-list"></div>
+            </div>
+            <div>
+              <div class="log-toolbar">
+                <span class="run-pane-label">Selected run log</span>
+                <select id="app-log-tail" class="select compact-select">
+                  <option value="40">Last 40</option>
+                  <option value="80" selected>Last 80</option>
+                  <option value="160">Last 160</option>
+                </select>
+                <button id="refresh-logs" class="app-button">Refresh logs</button>
+              </div>
+              <div id="app-live-log" class="live-log"></div>
+            </div>
+          </div>
+        </section>
 
         <section class="panel command-panel app-panel" data-section="overview runs research">
           <div class="panel-title-row">
@@ -311,6 +352,7 @@ def web_app_html() -> str:
                 </div>
                 <div id="app-metric-meta" class="chart-meta"></div>
                 <div id="app-metric-chart" class="chart-shell"></div>
+                <div id="app-metric-legend" class="metric-legend" hidden></div>
               </div>
             </div>
           </div>
@@ -383,6 +425,7 @@ def web_project_payload(project: WebAppProject) -> dict[str, Any]:
         "demo": project.demo,
         "project_root": str(project.project_root),
         "runs": runs,
+        "activity": _activity_from_runs(runs),
         "research_bundles": research_bundles,
         "metric_labels": _METRIC_LABELS,
         "metric_order": _WEB_METRIC_ORDER,
@@ -428,6 +471,24 @@ def web_run_payload(project: WebAppProject, ref: str) -> dict[str, Any]:
         "config": run.config_values,
         "artifacts": _run_artifacts_for_app(run, run_dir, project.project_root),
     }
+
+
+def web_run_logs_payload(project: WebAppProject, ref: str, *, tail: int = 80) -> dict[str, Any]:
+    """Collect a read-only live log tail for one run."""
+
+    safe_tail = min(max(int(tail), 1), 500)
+    if project.demo:
+        run = next((item for item in _preview_runs() if item["run_id"] == ref), _preview_runs()[0])
+        return _preview_log_payload(project.project_root, run, tail=safe_tail)
+
+    try:
+        run_dir = resolve_run_ref(ref, project.project_root)
+    except CompareError as exc:
+        raise ReportError(str(exc)) from exc
+    if run_dir is None:
+        raise ReportError(f"Run not found: {ref}")
+
+    return _run_log_payload(run_dir, project.project_root, tail=safe_tail)
 
 
 def web_research_payload(project: WebAppProject, bundle: str | None = None) -> dict[str, Any]:
@@ -604,6 +665,8 @@ def _dashboard_page_html(
         "generated_at": _utc_now_iso(),
         "project_root": str(project_root),
         "runs": run_payloads,
+        "activity": _activity_from_runs(run_payloads),
+        "log_snapshots": _dashboard_log_snapshots(project_root, run_payloads),
         "research_bundles": research_bundles,
         "metric_labels": _METRIC_LABELS,
         "metric_order": _WEB_METRIC_ORDER,
@@ -626,6 +689,27 @@ def _dashboard_page_html(
       {_stat_card("Completed", sum(1 for run in run_payloads if run.get("status") == "completed"))}
       {_stat_card("Research Bundles", len(research_bundles))}
       {_stat_card("Best Eval", _best_eval_label_from_payloads(run_payloads))}
+    </section>
+
+    <section class="panel split-panel">
+      <div>
+        <div class="panel-title-row">
+          <div>
+            <p class="eyebrow">Activity Snapshot</p>
+            <h2>Run Status</h2>
+          </div>
+        </div>
+        <div id="dashboard-activity-list" class="activity-list"></div>
+      </div>
+      <div>
+        <div class="panel-title-row">
+          <div>
+            <p class="eyebrow">Log Snapshot</p>
+            <h2>Latest Run Tail</h2>
+          </div>
+        </div>
+        <div id="dashboard-log-snapshot" class="live-log"></div>
+      </div>
     </section>
 
     <section class="panel split-panel">
@@ -951,6 +1035,22 @@ body {
   gap: 10px;
   flex: 0 0 auto;
 }
+.topbar-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.topbar-timestamp {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.topbar-panel .select.compact-select {
+  min-width: 120px;
+  padding: 7px 10px;
+  font-size: 0.84rem;
+}
 
 /* Status + buttons */
 .status-badge {
@@ -1106,6 +1206,134 @@ body {
 }
 .app-stat-grid { margin-top: 0; }
 .app-panel[data-hidden="true"] { display: none; }
+.activity-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.82fr) minmax(0, 1.18fr);
+  gap: 16px;
+  align-items: stretch;
+}
+.activity-list {
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.activity-card {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--soft-line);
+  border-radius: 8px;
+  background: var(--paper-2);
+  padding: 12px 13px;
+  color: var(--ink);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.activity-card:hover,
+.activity-card.active {
+  background: var(--paper);
+  border-color: var(--line);
+}
+.activity-card.active {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.activity-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.activity-card strong {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+.activity-card-meta {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  border: 1px solid var(--soft-line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--muted);
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: lowercase;
+}
+.status-pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.status-pill.running,
+.status-pill.prepared { color: var(--accent); }
+.status-pill.completed { color: var(--good); }
+.status-pill.failed,
+.status-pill.interrupted { color: var(--bad); }
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 2px 2px 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--soft-line);
+}
+.log-toolbar .select.compact-select {
+  min-width: 110px;
+  padding: 7px 9px;
+  font-size: 0.82rem;
+}
+.live-log {
+  min-height: 300px;
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid #111;
+  border-radius: 8px;
+  background: #10100f;
+  color: #f7f4ea;
+  padding: 12px;
+  font-family: "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+.live-log-line {
+  display: grid;
+  grid-template-columns: minmax(90px, 150px) minmax(0, 1fr);
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 250, 240, 0.06);
+}
+.live-log-line:last-child { border-bottom: none; }
+.live-log-source {
+  color: #a9a294;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-log-message {
+  color: #f5e8c8;
+  overflow-wrap: anywhere;
+}
+.live-log-line.metric .live-log-message { color: #b8d8ca; }
+.live-log-line.event .live-log-message { color: #f1d083; }
+.live-log-line.error .live-log-message { color: #ffb0a5; }
+.live-log-line.running .live-log-message { color: #9fc5b8; }
 .command-panel {
   background: #111;
   color: #f7f4ea;
@@ -1268,6 +1496,85 @@ body {
 }
 .metric-toolbar .select { min-width: 160px; padding: 7px 10px; font-size: 0.85rem; }
 .metric-toolbar .compact-select { min-width: 120px; }
+.metric-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 8px;
+  border: 1px solid var(--soft-line);
+  border-radius: 999px;
+  background: var(--paper);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.legend-chip.is-primary {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 10px;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.15);
+}
+.legend-remove {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  opacity: 0.65;
+}
+.legend-remove:hover { opacity: 1; }
+.run-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+.run-row .run-button {
+  flex: 1 1 auto;
+}
+.run-compare {
+  flex: 0 0 auto;
+  width: 30px;
+  border: 1px solid var(--soft-line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.run-compare:hover {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+.run-compare.active {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+.run-compare:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
 
 /* Hero (reports) */
 .hero {
@@ -1610,6 +1917,7 @@ th {
   .webapp-topbar { flex-direction: column; align-items: flex-start; }
   .topbar-panel { width: 100%; justify-content: flex-start; }
   .workspace-strip { grid-template-columns: 1fr; }
+  .activity-grid { grid-template-columns: 1fr; }
   .command-list { grid-template-columns: 1fr; }
   .command-context { text-align: left; }
   .hero, .split-panel, .two-column, .image-grid { grid-template-columns: 1fr; }
@@ -1851,6 +2159,15 @@ const runList = document.getElementById("run-list");
 const runDetail = document.getElementById("run-detail");
 const search = document.getElementById("run-search");
 let selectedRun = RLX.runs[0] || null;
+function dashboardStatusClass(status) {
+  return String(status || "unknown").toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+}
+function dashboardTimeAgo(value) {
+  if (!value) return "no timestamp";
+  const stamp = Date.parse(value);
+  if (Number.isNaN(stamp)) return String(value);
+  return formatRelative(Math.max(Date.now() - stamp, 0));
+}
 function runSearchText(run) {
   return [run.run_id, run.run_name, run.environment, run.status, (run.tags || []).join(" ")].join(" ").toLowerCase();
 }
@@ -1862,9 +2179,56 @@ function renderRuns() {
     button.addEventListener("click", () => {
       selectedRun = RLX.runs.find((run) => run.run_id === button.dataset.run);
       renderRuns();
+      renderActivitySnapshot();
       renderDetail();
+      renderLogSnapshot();
     });
   });
+}
+function renderActivitySnapshot() {
+  const list = document.getElementById("dashboard-activity-list");
+  if (!list) return;
+  const rows = ((RLX.activity && RLX.activity.runs) || []);
+  list.innerHTML = rows.map((run) => {
+    const active = selectedRun && selectedRun.run_id === run.run_id ? "active" : "";
+    const status = run.status || "unknown";
+    return `<button class="activity-card ${active}" data-run="${escapeText(run.run_id || "")}">
+      <div class="activity-card-top">
+        <strong>${escapeText(run.run_id || "unknown run")}</strong>
+        <span class="status-pill ${dashboardStatusClass(status)}">${escapeText(status)}</span>
+      </div>
+      <div class="activity-card-meta">${escapeText(run.environment || "unknown env")} · score ${fmt(run.score)} · updated ${escapeText(dashboardTimeAgo(run.updated_at))}</div>
+    </button>`;
+  }).join("") || '<div class="empty">No run activity found yet.</div>';
+  list.querySelectorAll(".activity-card").forEach((button) => {
+    button.addEventListener("click", () => {
+      selectedRun = RLX.runs.find((run) => run.run_id === button.dataset.run) || selectedRun;
+      renderRuns();
+      renderActivitySnapshot();
+      renderDetail();
+      renderLogSnapshot();
+    });
+  });
+}
+function renderLogSnapshot() {
+  const log = document.getElementById("dashboard-log-snapshot");
+  if (!log) return;
+  const payload = selectedRun && RLX.log_snapshots ? RLX.log_snapshots[selectedRun.run_id] : null;
+  const lines = (payload && payload.lines) || [];
+  if (!lines.length) {
+    log.innerHTML = '<div class="empty">No metrics or log lines found in this snapshot.</div>';
+    return;
+  }
+  log.innerHTML = lines.map((line) => {
+    const level = dashboardStatusClass(line.level || "log");
+    const source = line.step === null || line.step === undefined
+      ? line.source
+      : `${line.source} · ${fmt(line.step, 0)}`;
+    return `<div class="live-log-line ${level}">
+      <span class="live-log-source" title="${escapeText(line.source || "")}">${escapeText(source || "")}</span>
+      <span class="live-log-message">${escapeText(line.message || "")}</span>
+    </div>`;
+  }).join("");
 }
 function renderDetail() {
   if (!selectedRun) {
@@ -1891,7 +2255,9 @@ function renderResearch() {
 }
 search.addEventListener("input", renderRuns);
 renderRuns();
+renderActivitySnapshot();
 renderDetail();
+renderLogSnapshot();
 renderScoreChart();
 renderResearch();
 """
@@ -1899,6 +2265,7 @@ renderResearch();
 
 def _web_app_script() -> str:
     return """
+const COMPARE_COLORS = ["#315f56", "#8a4b19", "#3d4f80", "#7a3d63", "#4a6b2a", "#9c5d2c"];
 const appState = {
   project: null,
   runDetail: null,
@@ -1906,13 +2273,29 @@ const appState = {
   selectedRunId: null,
   selectedBundle: null,
   view: "overview",
+  compareRunIds: [],
+  compareDetails: {},
+  logPayload: null,
+  pollSeconds: 0,
+  pollTimer: null,
+  lastFetchAt: null,
+  refreshing: false,
 };
 const appEls = {
   connection: document.getElementById("connection-state"),
   refresh: document.getElementById("refresh-app"),
+  pollSelect: document.getElementById("app-poll-select"),
+  lastUpdated: document.getElementById("app-last-updated"),
   projectRoot: document.getElementById("project-root"),
   projectMode: document.getElementById("project-mode"),
+  projectRefreshMode: document.getElementById("project-refresh-mode"),
   stats: document.getElementById("app-stats"),
+  activityContext: document.getElementById("app-activity-context"),
+  activeCount: document.getElementById("app-active-count"),
+  activityList: document.getElementById("app-activity-list"),
+  logTail: document.getElementById("app-log-tail"),
+  refreshLogs: document.getElementById("refresh-logs"),
+  liveLog: document.getElementById("app-live-log"),
   runSearch: document.getElementById("app-run-search"),
   runList: document.getElementById("app-run-list"),
   runCount: document.getElementById("app-run-count"),
@@ -1922,6 +2305,7 @@ const appEls = {
   metricPoints: document.getElementById("app-metric-points"),
   metricMeta: document.getElementById("app-metric-meta"),
   metricChart: document.getElementById("app-metric-chart"),
+  metricLegend: document.getElementById("app-metric-legend"),
   artifacts: document.getElementById("app-artifacts"),
   researchSelect: document.getElementById("app-research-select"),
   researchFilter: document.getElementById("app-research-filter"),
@@ -1941,6 +2325,90 @@ async function appFetch(path) {
 function setAppStatus(text, error = false) {
   appEls.connection.textContent = text;
   appEls.connection.classList.toggle("error", error);
+}
+function markFetched() {
+  appState.lastFetchAt = Date.now();
+  updateLastUpdated();
+}
+function formatRelative(ms) {
+  if (ms < 2_000) return "just now";
+  if (ms < 60_000) return `${Math.floor(ms / 1000)}s ago`;
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
+  return `${Math.floor(ms / 3_600_000)}h ago`;
+}
+function updateLastUpdated() {
+  if (!appEls.lastUpdated) return;
+  if (!appState.lastFetchAt) {
+    appEls.lastUpdated.textContent = "";
+    return;
+  }
+  appEls.lastUpdated.textContent = `updated ${formatRelative(Date.now() - appState.lastFetchAt)}`;
+}
+function setPollInterval(seconds) {
+  appState.pollSeconds = Number(seconds) || 0;
+  if (appState.pollTimer) {
+    clearInterval(appState.pollTimer);
+    appState.pollTimer = null;
+  }
+  if (appEls.projectRefreshMode) {
+    appEls.projectRefreshMode.textContent = appState.pollSeconds > 0 ? `auto · ${appState.pollSeconds}s` : "manual";
+  }
+  if (appState.pollSeconds > 0) {
+    appState.pollTimer = setInterval(silentRefresh, appState.pollSeconds * 1000);
+  }
+}
+async function silentRefresh() {
+  if (appState.refreshing) return;
+  appState.refreshing = true;
+  try {
+    const project = await appFetch("/api/project");
+    appState.project = project;
+    appEls.projectRoot.textContent = project.demo ? "demo project" : project.project_root;
+    appEls.projectMode.textContent = project.demo ? "design preview" : "live project";
+    renderAppStats();
+    renderAppRunList();
+    renderAppActivity();
+    renderAppResearchPicker();
+    const tasks = [];
+    if (appState.selectedRunId) {
+      tasks.push(appFetch(`/api/run?ref=${encodeURIComponent(appState.selectedRunId)}`).then((data) => {
+        appState.runDetail = data;
+      }).catch(() => {}));
+      tasks.push(appFetch(`/api/logs?ref=${encodeURIComponent(appState.selectedRunId)}&tail=${encodeURIComponent(appEls.logTail.value || "80")}`).then((data) => {
+        appState.logPayload = data;
+      }).catch(() => {}));
+    }
+    for (const runId of appState.compareRunIds) {
+      tasks.push(appFetch(`/api/run?ref=${encodeURIComponent(runId)}`).then((data) => {
+        appState.compareDetails[runId] = data;
+      }).catch(() => {}));
+    }
+    if (appState.selectedBundle) {
+      tasks.push(appFetch(`/api/research?bundle=${encodeURIComponent(appState.selectedBundle)}`).then((data) => {
+        appState.researchDetail = data;
+      }).catch(() => {}));
+    }
+    await Promise.all(tasks);
+    if (appState.runDetail) {
+      renderAppRunDetail();
+      renderAppMetricControls();
+      renderAppMetric();
+      renderAppArtifacts();
+    }
+    if (appState.logPayload) {
+      renderAppLogs();
+    }
+    if (appState.researchDetail) {
+      renderAppResearchChart();
+    }
+    renderAppCommands();
+    setAppStatus("connected");
+    markFetched();
+  } catch (error) {
+    setAppStatus("offline", true);
+  } finally {
+    appState.refreshing = false;
+  }
 }
 function renderAppShell() {
   document.querySelectorAll(".nav-button").forEach((button) => {
@@ -1962,6 +2430,76 @@ function renderAppStats() {
     ["Best Eval", project.best_eval || "—"],
   ].map(([label, value]) => `<div class="stat-card"><span>${escapeText(label)}</span><strong>${escapeText(value)}</strong></div>`).join("");
 }
+function statusClass(status) {
+  return String(status || "unknown").toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+}
+function timeAgoLabel(value) {
+  if (!value) return "no timestamp";
+  const stamp = Date.parse(value);
+  if (Number.isNaN(stamp)) return String(value);
+  return formatRelative(Math.max(Date.now() - stamp, 0));
+}
+function renderAppActivity() {
+  if (!appEls.activityList) return;
+  const activity = (appState.project && appState.project.activity) || {runs: [], counts: {}, active_count: 0};
+  const rows = activity.runs || [];
+  if (appEls.activeCount) {
+    appEls.activeCount.textContent = String(activity.active_count || 0);
+  }
+  const counts = activity.counts || {};
+  if (appEls.activityContext) {
+    appEls.activityContext.textContent = `active ${activity.active_count || 0} · completed ${counts.completed || 0} · failed ${counts.failed || 0} · read-only`;
+  }
+  appEls.activityList.innerHTML = rows.map((run) => {
+    const active = run.run_id === appState.selectedRunId ? "active" : "";
+    const status = run.status || "unknown";
+    const score = run.score === null || run.score === undefined ? "—" : fmt(run.score);
+    const updated = run.updated_at || run.completed_at || run.started_at || run.created_at;
+    const errorLine = run.error ? `<br><span class="activity-card-meta">${escapeText(run.error)}</span>` : "";
+    return `<button class="activity-card ${active}" data-run="${escapeText(run.run_id || "")}">
+      <div class="activity-card-top">
+        <strong>${escapeText(run.run_id || "unknown run")}</strong>
+        <span class="status-pill ${statusClass(status)}">${escapeText(status)}</span>
+      </div>
+      <div class="activity-card-meta">${escapeText(run.environment || "unknown env")} · score ${score} · updated ${escapeText(timeAgoLabel(updated))}${errorLine}</div>
+    </button>`;
+  }).join("") || '<div class="empty">No run activity found yet.</div>';
+  appEls.activityList.querySelectorAll(".activity-card").forEach((button) => {
+    button.addEventListener("click", () => selectAppRun(button.dataset.run));
+  });
+}
+async function fetchAppLogs() {
+  if (!appState.selectedRunId || !appEls.liveLog) {
+    if (appEls.liveLog) appEls.liveLog.innerHTML = '<div class="empty">Select a run to read logs.</div>';
+    return;
+  }
+  try {
+    const tail = appEls.logTail ? appEls.logTail.value || "80" : "80";
+    appState.logPayload = await appFetch(`/api/logs?ref=${encodeURIComponent(appState.selectedRunId)}&tail=${encodeURIComponent(tail)}`);
+    renderAppLogs();
+  } catch (error) {
+    appEls.liveLog.innerHTML = `<div class="empty">${escapeText(error.message)}</div>`;
+  }
+}
+function renderAppLogs() {
+  if (!appEls.liveLog) return;
+  const payload = appState.logPayload || {};
+  const lines = payload.lines || [];
+  if (!lines.length) {
+    appEls.liveLog.innerHTML = '<div class="empty">No metrics or log lines found yet.</div>';
+    return;
+  }
+  appEls.liveLog.innerHTML = lines.map((line) => {
+    const level = statusClass(line.level || "log");
+    const source = line.step === null || line.step === undefined
+      ? line.source
+      : `${line.source} · ${fmt(line.step, 0)}`;
+    return `<div class="live-log-line ${level}">
+      <span class="live-log-source" title="${escapeText(line.source || "")}">${escapeText(source || "")}</span>
+      <span class="live-log-message">${escapeText(line.message || "")}</span>
+    </div>`;
+  }).join("");
+}
 function quoteArg(value) {
   const text = String(value ?? "");
   if (/^[A-Za-z0-9_./:@=-]+$/.test(text)) return text;
@@ -1975,7 +2513,7 @@ function checkpointPath(run, preferred = "best") {
   return checkpoint ? `${runPath(run.run_id)}/${checkpoint}` : `${runPath(run.run_id)}/checkpoints/latest.zip`;
 }
 function topRunIds(limit = 3) {
-  return (appState.project.runs || [])
+  return ((appState.project && appState.project.runs) || [])
     .filter((run) => run.run_id)
     .slice()
     .sort((a, b) => (scoreOfRun(b) ?? -Infinity) - (scoreOfRun(a) ?? -Infinity))
@@ -2066,33 +2604,87 @@ function appRunSearchText(run) {
   return [run.run_id, run.run_name, run.environment, run.status, (run.tags || []).join(" ")].join(" ").toLowerCase();
 }
 function renderAppRunList() {
-  const runs = appState.project.runs || [];
+  const runs = (appState.project && appState.project.runs) || [];
   const q = (appEls.runSearch.value || "").toLowerCase();
   const filtered = runs.filter((run) => appRunSearchText(run).includes(q));
   if (appEls.runCount) {
     appEls.runCount.textContent = q ? `${filtered.length}/${runs.length}` : String(runs.length);
   }
   appEls.runList.innerHTML = filtered.map((run) => {
-    const active = appState.selectedRunId === run.run_id ? "active" : "";
-    return `<button class="run-button ${active}" data-run="${escapeText(run.run_id)}"><strong>${escapeText(run.run_id)}</strong><span>${escapeText(run.environment || "unknown")} · ${escapeText(run.status || "unknown")} · score ${fmt(scoreOfRun(run))}</span></button>`;
+    const isSelected = appState.selectedRunId === run.run_id;
+    const active = isSelected ? "active" : "";
+    const isCompared = appState.compareRunIds.includes(run.run_id);
+    const compareActive = isCompared ? "active" : "";
+    const compareLabel = isCompared ? "−" : "+";
+    const compareDisabled = isSelected ? "disabled" : "";
+    const compareTitle = isSelected ? "Already the primary run" : (isCompared ? "Remove from chart overlay" : "Overlay on the chart");
+    return `<div class="run-row"><button class="run-button ${active}" data-run="${escapeText(run.run_id)}"><strong>${escapeText(run.run_id)}</strong><span>${escapeText(run.environment || "unknown")} · ${escapeText(run.status || "unknown")} · score ${fmt(scoreOfRun(run))}</span></button><button class="run-compare ${compareActive}" data-compare="${escapeText(run.run_id)}" title="${escapeText(compareTitle)}" ${compareDisabled}>${compareLabel}</button></div>`;
   }).join("") || '<div class="empty">No runs match the current search.</div>';
-  appEls.runList.querySelectorAll("button").forEach((button) => {
+  appEls.runList.querySelectorAll("button.run-button").forEach((button) => {
     button.addEventListener("click", () => selectAppRun(button.dataset.run));
   });
+  appEls.runList.querySelectorAll("button.run-compare").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (button.disabled) return;
+      toggleCompare(button.dataset.compare);
+    });
+  });
+}
+async function toggleCompare(runId) {
+  if (!runId) return;
+  if (runId === appState.selectedRunId) return;
+  const idx = appState.compareRunIds.indexOf(runId);
+  if (idx >= 0) {
+    appState.compareRunIds.splice(idx, 1);
+    delete appState.compareDetails[runId];
+    renderAppRunList();
+    renderAppMetric();
+    return;
+  }
+  if (appState.compareRunIds.length >= 5) return;
+  appState.compareRunIds.push(runId);
+  renderAppRunList();
+  renderAppMetric();
+  try {
+    appState.compareDetails[runId] = await appFetch(`/api/run?ref=${encodeURIComponent(runId)}`);
+    renderAppMetric();
+  } catch (error) {
+    const i = appState.compareRunIds.indexOf(runId);
+    if (i >= 0) appState.compareRunIds.splice(i, 1);
+    delete appState.compareDetails[runId];
+    renderAppRunList();
+    renderAppMetric();
+  }
 }
 async function selectAppRun(runId) {
   if (!runId) return;
   appState.selectedRunId = runId;
+  const dropIdx = appState.compareRunIds.indexOf(runId);
+  if (dropIdx >= 0) {
+    appState.compareRunIds.splice(dropIdx, 1);
+    delete appState.compareDetails[runId];
+  }
   renderAppRunList();
+  renderAppActivity();
   appEls.runDetail.innerHTML = '<div class="empty">Loading run data...</div>';
   appEls.metricChart.innerHTML = '<div class="empty">Loading metrics...</div>';
+  if (appEls.liveLog) appEls.liveLog.innerHTML = '<div class="empty">Loading logs...</div>';
   try {
-    appState.runDetail = await appFetch(`/api/run?ref=${encodeURIComponent(runId)}`);
+    const [runDetail, logs] = await Promise.all([
+      appFetch(`/api/run?ref=${encodeURIComponent(runId)}`),
+      appFetch(`/api/logs?ref=${encodeURIComponent(runId)}&tail=${encodeURIComponent(appEls.logTail.value || "80")}`).catch(() => null),
+    ]);
+    appState.runDetail = runDetail;
+    appState.logPayload = logs;
     renderAppRunDetail();
     renderAppMetricControls();
     renderAppMetric();
     renderAppArtifacts();
+    if (logs) renderAppLogs();
+    else if (appEls.liveLog) appEls.liveLog.innerHTML = '<div class="empty">No log payload available.</div>';
     renderAppCommands();
+    markFetched();
   } catch (error) {
     appEls.runDetail.innerHTML = `<div class="empty">${escapeText(error.message)}</div>`;
     renderAppCommands();
@@ -2130,36 +2722,139 @@ function renderAppMetricControls() {
   const labels = (appState.runDetail && appState.runDetail.metric_labels) || {};
   appEls.metricSelect.innerHTML = keys.map((key) => `<option value="${escapeText(key)}">${escapeText(labels[key] || key)}</option>`).join("");
 }
+function clampPoints(rawPoints, windowValue) {
+  return windowValue === "all" ? rawPoints : rawPoints.slice(-Number(windowValue));
+}
+function buildSeriesForRun(detail, key, windowValue) {
+  if (!detail) return null;
+  const metrics = detail.metrics || {};
+  const labels = detail.metric_labels || {};
+  const points = (metrics[key] || []).map((p) => ({x: p.step, y: p.value, label: labels[key] || key}));
+  if (points.length < 2) return null;
+  return {runId: detail.run && detail.run.run_id, points: clampPoints(points, windowValue), raw: points};
+}
+function renderMetricLegend(series) {
+  if (!appEls.metricLegend) return;
+  if (series.length <= 1) {
+    appEls.metricLegend.hidden = true;
+    appEls.metricLegend.innerHTML = "";
+    return;
+  }
+  appEls.metricLegend.hidden = false;
+  appEls.metricLegend.innerHTML = series.map((entry, index) => {
+    const color = COMPARE_COLORS[index % COMPARE_COLORS.length];
+    const last = entry.points[entry.points.length - 1];
+    const valueText = last ? fmt(last.y, 3) : "—";
+    const isPrimary = index === 0;
+    const remove = isPrimary
+      ? ""
+      : `<button class="legend-remove" data-remove="${escapeText(entry.runId)}" title="Remove from overlay">×</button>`;
+    return `<span class="legend-chip ${isPrimary ? "is-primary" : ""}"><span class="legend-swatch" style="background:${color}"></span><span>${escapeText(entry.runId || "run")} · ${valueText}</span>${remove}</span>`;
+  }).join("");
+  appEls.metricLegend.querySelectorAll(".legend-remove").forEach((button) => {
+    button.addEventListener("click", () => toggleCompare(button.dataset.remove));
+  });
+}
 function renderAppMetric() {
   const detail = appState.runDetail || {};
-  const metrics = detail.metrics || {};
   const labels = detail.metric_labels || {};
   const keys = appMetricKeys();
   if (!keys.length) {
     appEls.metricMeta.textContent = "";
     appEls.metricChart.innerHTML = '<div class="empty">No multi-point training metrics found yet.</div>';
+    if (appEls.metricLegend) {
+      appEls.metricLegend.hidden = true;
+      appEls.metricLegend.innerHTML = "";
+    }
     return;
   }
   const key = appEls.metricSelect.value || keys[0];
-  const rawPoints = (metrics[key] || []).map((p) => ({x: p.step, y: p.value, label: labels[key] || key}));
   const windowValue = appEls.metricWindow.value;
-  const points = windowValue === "all" ? rawPoints : rawPoints.slice(-Number(windowValue));
-  appEls.metricMeta.textContent = `${labels[key] || key} / ${points.length} of ${rawPoints.length} points shown`;
-  lineChart(appEls.metricChart, points, {title: labels[key] || key, showPoints: appEls.metricPoints.checked});
+  const primary = buildSeriesForRun(detail, key, windowValue);
+  const series = primary ? [primary] : [];
+  for (const runId of appState.compareRunIds) {
+    const compareDetail = appState.compareDetails[runId];
+    const built = buildSeriesForRun(compareDetail, key, windowValue);
+    if (built) series.push(built);
+    else if (compareDetail === undefined) series.push({runId, points: [], raw: [], pending: true});
+  }
+  const usable = series.filter((entry) => entry.points.length >= 2);
+  const primaryRaw = primary ? primary.raw.length : 0;
+  const primaryShown = primary ? primary.points.length : 0;
+  const compareCount = appState.compareRunIds.length;
+  const metaParts = [`${labels[key] || key} / ${primaryShown} of ${primaryRaw} points shown`];
+  if (compareCount) metaParts.push(`comparing ${compareCount} other run${compareCount === 1 ? "" : "s"}`);
+  appEls.metricMeta.textContent = metaParts.join(" · ");
+  if (!usable.length) {
+    appEls.metricChart.innerHTML = '<div class="empty">No multi-point training metrics found yet.</div>';
+    renderMetricLegend(series);
+    return;
+  }
+  if (usable.length === 1) {
+    lineChart(appEls.metricChart, usable[0].points, {title: labels[key] || key, showPoints: appEls.metricPoints.checked});
+  } else {
+    multiLineChart(appEls.metricChart, usable, {title: labels[key] || key, showPoints: appEls.metricPoints.checked});
+  }
+  renderMetricLegend(series);
+}
+function multiLineChart(container, series, opts = {}) {
+  if (!container || !series || !series.length) {
+    container.innerHTML = '<div class="empty">No chartable data found.</div>';
+    return;
+  }
+  const width = 1040, height = 420;
+  const pad = {left: 70, right: 30, top: 54, bottom: 62};
+  const allPoints = series.flatMap((entry) => entry.points);
+  const xs = allPoints.map((p) => Number(p.x));
+  const ys = allPoints.map((p) => Number(p.y));
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  let minY = Math.min(...ys), maxY = Math.max(...ys);
+  if (minY === maxY) { minY -= 1; maxY += 1; }
+  const xScale = (x) => pad.left + ((x - minX) / Math.max(maxX - minX, 1)) * (width - pad.left - pad.right);
+  const yScale = (y) => height - pad.bottom - ((y - minY) / Math.max(maxY - minY, 1)) * (height - pad.top - pad.bottom);
+  const yTicks = [minY, minY + (maxY-minY)*0.25, minY + (maxY-minY)*0.5, minY + (maxY-minY)*0.75, maxY];
+  const grid = yTicks.map((y) => `<line x1="${pad.left}" x2="${width-pad.right}" y1="${yScale(y)}" y2="${yScale(y)}" stroke="#d6d1c5" /><text x="18" y="${yScale(y)+4}" font-size="12" fill="#6c6a62">${fmt(y)}</text>`).join("");
+  const showPoints = opts.showPoints !== false;
+  const paths = series.map((entry, index) => {
+    const color = COMPARE_COLORS[index % COMPARE_COLORS.length];
+    const d = entry.points.map((p, i) => `${i === 0 ? "M" : "L"} ${xScale(Number(p.x)).toFixed(2)} ${yScale(Number(p.y)).toFixed(2)}`).join(" ");
+    const circles = showPoints ? entry.points.map((p) => `<circle cx="${xScale(Number(p.x)).toFixed(2)}" cy="${yScale(Number(p.y)).toFixed(2)}" r="3.4" fill="${color}"><title>${escapeText(entry.runId || "")} step ${fmt(p.x, 0)}: ${fmt(p.y)}</title></circle>`).join("") : "";
+    const strokeWidth = index === 0 ? 3.2 : 2.4;
+    const opacity = index === 0 ? 1 : 0.85;
+    return `<g><path d="${d}" fill="none" stroke="${color}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" opacity="${opacity}" />${circles}</g>`;
+  }).join("");
+  container.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img">
+    ${grid}
+    <line x1="${pad.left}" x2="${width-pad.right}" y1="${height-pad.bottom}" y2="${height-pad.bottom}" stroke="#252525" />
+    <line x1="${pad.left}" x2="${pad.left}" y1="${pad.top}" y2="${height-pad.bottom}" stroke="#252525" />
+    <text x="${pad.left}" y="30" fill="#171717" font-size="18" font-weight="850">${escapeText(opts.title || "")}</text>
+    ${paths}
+    <text x="${width/2}" y="${height-16}" fill="#6c6a62" font-size="12" text-anchor="middle">${escapeText(opts.xLabel || "step")}</text>
+  </svg>`;
+  const primary = series[0];
+  if (primary && primary.points.length) {
+    attachPointTooltip(
+      container,
+      primary.points.map((p) => ({x: xScale(Number(p.x)), y: yScale(Number(p.y)), row: p})),
+      (p) => `<strong>${escapeText(primary.runId || opts.title || "metric")}</strong><br>step ${fmt(p.x, 0)}<br>value ${fmt(p.y, 4)}`
+    );
+  }
 }
 function renderAppArtifacts() {
   const artifacts = (appState.runDetail && appState.runDetail.artifacts) || [];
   appEls.artifacts.innerHTML = artifacts.map((item) => `<a class="artifact-link" href="${escapeText(item.href)}" target="_blank" rel="noreferrer"><strong>${escapeText(item.label)}</strong><br><span class="muted">${escapeText(item.path)}</span></a>`).join("") || '<div class="empty">No artifacts found.</div>';
 }
 function renderAppResearchPicker() {
-  const bundles = appState.project.research_bundles || [];
+  const bundles = (appState.project && appState.project.research_bundles) || [];
   appEls.researchSelect.innerHTML = bundles.map((item) => `<option value="${escapeText(item.bundle)}">${escapeText(item.initial_run_id || item.bundle)} · ${fmt(item.champion_score)}</option>`).join("");
   if (!bundles.length) {
     appEls.researchChart.innerHTML = '<div class="empty">No research bundles yet.</div>';
     appEls.researchInspector.textContent = "Run `rlx research ...` to populate this panel.";
     return;
   }
-  appState.selectedBundle = appState.selectedBundle || bundles[0].bundle;
+  if (!appState.selectedBundle || !bundles.some((item) => item.bundle === appState.selectedBundle)) {
+    appState.selectedBundle = bundles[0].bundle;
+  }
   appEls.researchSelect.value = appState.selectedBundle;
 }
 async function selectAppResearch(bundle) {
@@ -2210,6 +2905,7 @@ async function loadApp() {
     appEls.projectMode.textContent = appState.project.demo ? "design preview" : "live project";
     renderAppStats();
     renderAppRunList();
+    renderAppActivity();
     renderAppResearchPicker();
     renderAppCommands();
     if (!appState.selectedRunId && (appState.project.runs || []).length) {
@@ -2220,6 +2916,7 @@ async function loadApp() {
       appState.selectedBundle ? selectAppResearch(appState.selectedBundle) : Promise.resolve(),
     ]);
     setAppStatus("connected");
+    markFetched();
   } catch (error) {
     setAppStatus("error", true);
     appEls.stats.innerHTML = `<div class="empty">${escapeText(error.message)}</div>`;
@@ -2240,6 +2937,17 @@ appEls.metricPoints.addEventListener("change", renderAppMetric);
 appEls.researchSelect.addEventListener("change", () => selectAppResearch(appEls.researchSelect.value));
 appEls.researchFilter.addEventListener("change", renderAppResearchChart);
 appEls.researchWindow.addEventListener("input", renderAppResearchChart);
+if (appEls.refreshLogs) {
+  appEls.refreshLogs.addEventListener("click", fetchAppLogs);
+}
+if (appEls.logTail) {
+  appEls.logTail.addEventListener("change", fetchAppLogs);
+}
+if (appEls.pollSelect) {
+  appEls.pollSelect.addEventListener("change", () => setPollInterval(appEls.pollSelect.value));
+}
+setInterval(updateLastUpdated, 1000);
+setPollInterval(0);
 renderAppShell();
 loadApp();
 """
@@ -2295,6 +3003,7 @@ renderRounds();
 
 
 def _run_payload(run: RunComparison) -> dict[str, Any]:
+    metadata = _safe_json_dict(run.run_dir / METADATA_NAME)
     return {
         "run_id": run.run_id,
         "run_name": run.run_name,
@@ -2305,6 +3014,13 @@ def _run_payload(run: RunComparison) -> dict[str, Any]:
         "requested_device": run.requested_device,
         "resolved_device": run.resolved_device,
         "total_timesteps": run.total_timesteps,
+        "created_at": _maybe_text(metadata.get("created_at")),
+        "started_at": _maybe_text(metadata.get("started_at")),
+        "completed_at": _maybe_text(metadata.get("completed_at")),
+        "failed_at": _maybe_text(metadata.get("failed_at")),
+        "interrupted_at": _maybe_text(metadata.get("interrupted_at")),
+        "updated_at": _latest_artifact_time(run.run_dir),
+        "error": _maybe_text(metadata.get("error")),
         "final_rollout_reward": run.final_rollout_reward,
         "best_rollout_reward": run.best_rollout_reward,
         "latest_checkpoint": run.latest_checkpoint,
@@ -2313,6 +3029,298 @@ def _run_payload(run: RunComparison) -> dict[str, Any]:
         "best_eval": _eval_payload(run.best_eval),
         "last_video_manifest": run.last_video_manifest,
     }
+
+
+def _activity_from_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    statuses = ["prepared", "running", "completed", "failed", "interrupted"]
+    counts = {status: 0 for status in statuses}
+    rows: list[dict[str, Any]] = []
+
+    for run in runs:
+        status = str(run.get("status") or "unknown")
+        if status in counts:
+            counts[status] += 1
+        else:
+            counts["unknown"] = counts.get("unknown", 0) + 1
+        rows.append(
+            {
+                "run_id": run.get("run_id"),
+                "status": status,
+                "environment": run.get("environment"),
+                "score": _score_from_run_payload(run),
+                "total_timesteps": run.get("total_timesteps"),
+                "updated_at": run.get("updated_at"),
+                "started_at": run.get("started_at"),
+                "completed_at": run.get("completed_at"),
+                "failed_at": run.get("failed_at"),
+                "interrupted_at": run.get("interrupted_at"),
+                "error": run.get("error"),
+            }
+        )
+
+    active = [row for row in rows if row["status"] in {"prepared", "running"}]
+    rows.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
+    rows.sort(
+        key=lambda row: 0 if row["status"] == "running" else 1 if row["status"] == "prepared" else 2
+    )
+    return {
+        "counts": counts,
+        "active_count": len(active),
+        "runs": rows[:80],
+    }
+
+
+def _score_from_run_payload(run: dict[str, Any]) -> float | None:
+    best_eval = run.get("best_eval")
+    if isinstance(best_eval, dict):
+        value = best_eval.get("mean_reward")
+        if isinstance(value, int | float):
+            return float(value)
+    value = run.get("final_rollout_reward")
+    if isinstance(value, int | float):
+        return float(value)
+    return None
+
+
+def _run_log_payload(run_dir: Path, project_root: Path, *, tail: int) -> dict[str, Any]:
+    metadata = _safe_json_dict(run_dir / METADATA_NAME)
+    run_id = _maybe_text(metadata.get("run_id")) or run_dir.name
+    status = _maybe_text(metadata.get("status")) or "unknown"
+    head = [_metadata_log_entry(metadata, status=status)]
+
+    event_lines: list[dict[str, Any]] = []
+    event_lines.extend(_metric_log_entries(run_dir / METRICS_NAME))
+    event_lines.extend(_plain_log_entries(run_dir / "logs", project_root=project_root))
+    event_lines.sort(key=lambda item: (int(item.get("order", 0)), str(item.get("source", ""))))
+    lines = head + event_lines[-tail:]
+    for line in lines:
+        line.pop("order", None)
+
+    return {
+        "kind": "logs",
+        "generated_at": _utc_now_iso(),
+        "project_root": str(project_root),
+        "run_id": run_id,
+        "status": status,
+        "tail": tail,
+        "updated_at": _latest_artifact_time(run_dir),
+        "lines": lines,
+    }
+
+
+def _preview_log_payload(root: Path, run: dict[str, Any], *, tail: int) -> dict[str, Any]:
+    lines = [
+        {
+            "source": "metadata.json",
+            "level": "status",
+            "step": None,
+            "message": f"status={run.get('status', 'unknown')} env={run.get('environment', 'unknown')} score={_fmt_optional(_score_from_run_payload(run))}",
+        },
+        {
+            "source": "metrics.jsonl",
+            "level": "event",
+            "step": 0,
+            "message": "training_start total_timesteps=50000",
+        },
+        {
+            "source": "metrics.jsonl",
+            "level": "metric",
+            "step": 8192,
+            "message": "step=8192 reward=128.20 ep_len=128.20 approx_kl=0.0008 value_loss=81.00",
+        },
+        {
+            "source": "eval/manual_eval_002.json",
+            "level": "eval",
+            "step": None,
+            "message": "standalone eval best.zip mean_reward=251.20",
+        },
+        {
+            "source": "metrics.jsonl",
+            "level": "event",
+            "step": 50176,
+            "message": "training_end step=50176",
+        },
+    ]
+    return {
+        "kind": "logs",
+        "generated_at": _utc_now_iso(),
+        "project_root": str(root),
+        "run_id": str(run.get("run_id") or "preview_cartpole_001"),
+        "status": str(run.get("status") or "completed"),
+        "tail": tail,
+        "updated_at": run.get("updated_at"),
+        "lines": lines[-tail:],
+    }
+
+
+def _dashboard_log_snapshots(
+    project_root: Path,
+    run_payloads: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    snapshots: dict[str, dict[str, Any]] = {}
+    for run in run_payloads[:80]:
+        run_id = _maybe_text(run.get("run_id"))
+        if not run_id:
+            continue
+        run_dir = Path(str(run.get("run_dir") or ""))
+        if run_dir.is_dir():
+            snapshots[run_id] = _run_log_payload(run_dir, project_root, tail=40)
+        else:
+            snapshots[run_id] = _preview_log_payload(project_root, run, tail=40)
+    return snapshots
+
+
+def _metadata_log_entry(metadata: dict[str, Any], *, status: str) -> dict[str, Any]:
+    fields = [f"status={status}"]
+    for key in ("created_at", "started_at", "completed_at", "failed_at", "interrupted_at"):
+        value = _maybe_text(metadata.get(key))
+        if value:
+            fields.append(f"{key}={value}")
+    error = _maybe_text(metadata.get("error"))
+    if error:
+        fields.append(f"error={error}")
+    return {
+        "source": METADATA_NAME,
+        "level": _level_for_status(status),
+        "step": None,
+        "message": " ".join(fields),
+        "order": 0,
+    }
+
+
+def _metric_log_entries(path: Path) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for index, line in enumerate(_tail_text_lines(path, 500), start=1):
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        step = payload.get("step")
+        if not isinstance(step, int):
+            step = None
+        event = _maybe_text(payload.get("event"))
+        if event:
+            message = event
+            if step is not None:
+                message += f" step={step}"
+            total = payload.get("total_timesteps")
+            if isinstance(total, int | float):
+                message += f" total_timesteps={int(total)}"
+            entries.append(
+                {
+                    "source": METRICS_NAME,
+                    "level": "event",
+                    "step": step,
+                    "message": message,
+                    "order": index,
+                }
+            )
+            continue
+
+        parts = []
+        if step is not None:
+            parts.append(f"step={step}")
+        for key, label in (
+            ("rollout/ep_rew_mean", "reward"),
+            ("rollout/ep_len_mean", "ep_len"),
+            ("train/approx_kl", "approx_kl"),
+            ("train/value_loss", "value_loss"),
+            ("train/loss", "loss"),
+            ("train/n_updates", "updates"),
+            ("progress_remaining", "progress"),
+        ):
+            value = payload.get(key)
+            if isinstance(value, int | float):
+                digits = 4 if abs(float(value)) < 0.01 and value != 0 else 2
+                parts.append(f"{label}={float(value):.{digits}f}")
+        if parts:
+            entries.append(
+                {
+                    "source": METRICS_NAME,
+                    "level": "metric",
+                    "step": step,
+                    "message": " ".join(parts),
+                    "order": index,
+                }
+            )
+    return entries
+
+
+def _plain_log_entries(log_dir: Path, *, project_root: Path) -> list[dict[str, Any]]:
+    if not log_dir.is_dir():
+        return []
+    entries: list[dict[str, Any]] = []
+    for path in sorted(log_dir.glob("*")):
+        if not path.is_file() or path.suffix.lower() not in {".log", ".txt", ".out"}:
+            continue
+        try:
+            source = str(path.relative_to(project_root))
+        except ValueError:
+            source = path.name
+        for index, line in enumerate(_tail_text_lines(path, 120), start=1):
+            if not line.strip():
+                continue
+            entries.append(
+                {
+                    "source": source,
+                    "level": "log",
+                    "step": None,
+                    "message": line.strip(),
+                    "order": 100_000 + index,
+                }
+            )
+    return entries
+
+
+def _tail_text_lines(path: Path, limit: int) -> list[str]:
+    if not path.is_file():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    return lines[-limit:]
+
+
+def _safe_json_dict(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _latest_artifact_time(run_dir: Path) -> str | None:
+    paths = [run_dir / METADATA_NAME, run_dir / METRICS_NAME]
+    for dirname in ("eval", "logs", "checkpoints", "videos", "plots"):
+        directory = run_dir / dirname
+        if directory.is_dir():
+            paths.extend(path for path in directory.glob("*") if path.is_file())
+    mtimes = []
+    for path in paths:
+        try:
+            mtimes.append(path.stat().st_mtime)
+        except OSError:
+            continue
+    if not mtimes:
+        return None
+    return datetime.fromtimestamp(max(mtimes), UTC).isoformat().replace("+00:00", "Z")
+
+
+def _maybe_text(value: Any) -> str | None:
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _level_for_status(status: str | None) -> str:
+    if status in {"failed", "interrupted"}:
+        return "error"
+    if status == "running":
+        return "running"
+    return "status"
 
 
 def _preview_run_data(root: Path) -> dict[str, Any]:

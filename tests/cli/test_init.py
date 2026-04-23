@@ -30,7 +30,14 @@ def test_init_creates_project_scaffold() -> None:
         )
         assert (project_root / ".gitignore").exists()
         assert ".env" in (project_root / ".gitignore").read_text(encoding="utf-8")
+        protocol = project_root / "research.yaml"
+        assert protocol.exists()
+        protocol_text = protocol.read_text(encoding="utf-8")
+        assert "objective: maximize eval reward" in protocol_text
+        assert "allowed_changes:" in protocol_text
+        assert "locked:" in protocol_text
         assert "cp .env.example .env" in result.stdout
+        assert "research.yaml" in result.stdout
 
         for filename in catalog_config_names():
             assert (project_root / "configs" / filename).exists()

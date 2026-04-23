@@ -18,6 +18,7 @@ from rlx.core.report import (
     web_file_path,
     web_project_payload,
     web_research_payload,
+    web_run_logs_payload,
     web_run_payload,
 )
 
@@ -149,6 +150,10 @@ def _make_dashboard_handler(project: WebAppProject):
                 elif route == "/api/run":
                     ref = _single_query_value(query, "ref")
                     self._send_json(web_run_payload(project, ref))
+                elif route == "/api/logs":
+                    ref = _single_query_value(query, "ref")
+                    tail = _int_query_value(query, "tail", default=80, minimum=1, maximum=500)
+                    self._send_json(web_run_logs_payload(project, ref, tail=tail))
                 elif route == "/api/research":
                     bundle = query.get("bundle", [None])[0]
                     self._send_json(web_research_payload(project, bundle))
@@ -196,3 +201,19 @@ def _single_query_value(query: dict[str, list[str]], key: str) -> str:
     if not value:
         raise ReportError(f"Missing query parameter: {key}")
     return value
+
+
+def _int_query_value(
+    query: dict[str, list[str]],
+    key: str,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw = query.get(key, [str(default)])[0]
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ReportError(f"Query parameter must be an integer: {key}") from exc
+    return min(max(value, minimum), maximum)

@@ -124,6 +124,49 @@ def test_research_command_supports_mock_llm_planner(monkeypatch) -> None:
         assert advisor_manifest["protocol"]["fallback"]["rules_filled"] == 3
 
 
+def test_research_command_can_use_protocol_baseline() -> None:
+    with runner.isolated_filesystem():
+        init_result = runner.invoke(app, ["init", "bossfight"])
+        assert init_result.exit_code == 0
+
+        _write_fake_run(Path("bossfight/runs/tiny_research_001"))
+        Path("bossfight/research.yaml").write_text(
+            dedent(
+                """
+                objective: maximize eval reward
+                baseline: tiny_research_001
+
+                budget:
+                  max_rounds: 1
+                  max_variants_per_round: 1
+                  max_timesteps_per_variant: 256
+
+                allowed_changes:
+                  - algo.learning_rate
+
+                locked:
+                  - env.id
+                  - algo.total_timesteps
+                  - eval.episodes
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(app, ["research", "--protocol", "bossfight/research.yaml"])
+
+        assert result.exit_code == 0
+        assert "RLCLI Research Complete" in result.stdout
+        manifest_path = Path(
+            "bossfight/analysis/research/tiny_research_001_research_001/manifest.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert manifest["protocol"]["source_protocol_name"] == "research.yaml"
+        assert manifest["settings"]["rounds"] == 1
+        assert manifest["settings"]["variants"] == 1
+
+
 def _write_fake_run(run_dir: Path) -> None:
     run_dir.mkdir(parents=True)
     for dirname in ("checkpoints", "eval", "videos", "plots", "logs"):

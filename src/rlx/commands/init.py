@@ -4,6 +4,7 @@ import typer
 
 from rlx.console import build_summary, console, print_panel
 from rlx.core.projects import ProjectInitError, init_project
+from rlx.paths import RESEARCH_PROTOCOL
 
 
 def init_command(
@@ -34,6 +35,10 @@ def init_command(
             (
                 "[muted]LLM setup[/muted]",
                 "[value]cp .env.example .env[/value]",
+            ),
+            (
+                "[muted]Research protocol[/muted]",
+                f"[path]{RESEARCH_PROTOCOL}[/path]",
             ),
             ("[muted]Next[/muted]", f"[value]cd {result.project_root.name}[/value]"),
         ]

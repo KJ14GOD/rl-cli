@@ -116,6 +116,7 @@ Generate next experiment ideas:
 ```bash
 rlx advisor cartpole_ppo_001 --variants 4
 rlx research cartpole_ppo_001 --rounds 3 --variants 4
+rlx research --protocol research.yaml
 ```
 
 Train advisor/research variants:
@@ -123,6 +124,7 @@ Train advisor/research variants:
 ```bash
 rlx advisor cartpole_ppo_001 --execute --variants 4
 rlx research cartpole_ppo_001 --execute --rounds 3 --variants 4
+rlx research --protocol research.yaml --execute
 ```
 
 ## Project Layout
@@ -307,6 +309,7 @@ rlx advisor <run>
 rlx advisor <run> --planner llm --llm-provider openai --llm-model gpt-5.4-mini
 rlx advisor <run> --planner llm --llm-provider ollama --llm-model qwen3:8b
 rlx research <run> --rounds 3 --variants 4
+rlx research --protocol research.yaml
 rlx research <run> --planner llm --execute --rounds 3 --variants 4
 rlx research --resume analysis/research/cartpole_ppo_001_research_001 --rounds 5
 ```
@@ -359,6 +362,44 @@ the current champion, and then uses that champion as the next baseline.
 ```bash
 rlx research cartpole_ppo_001 --execute --rounds 3 --variants 4
 ```
+
+For a customer-friendly, bounded loop, use the project-level `research.yaml` created
+by `rlx init`:
+
+```bash
+rlx research --protocol research.yaml --execute
+```
+
+Example:
+
+```yaml
+objective: maximize eval reward
+baseline: cartpole_ppo_001
+
+budget:
+  max_rounds: 10
+  max_variants_per_round: 4
+  max_timesteps_per_variant: 50000
+
+allowed_changes:
+  - algo.learning_rate
+  - algo.gamma
+  - algo.gae_lambda
+  - algo.clip_range
+  - algo.entropy_coef
+  - algo.update_epochs
+  - policy.hidden_sizes
+
+locked:
+  - env.id
+  - algo.total_timesteps
+  - eval.every
+  - eval.episodes
+  - eval.deterministic
+```
+
+CLI flags can still override protocol budget values when you need a quick test, but
+the saved research manifest always records the effective protocol.
 
 Outputs:
 
@@ -432,8 +473,9 @@ values, and metric notes. Research reports include the champion, rounds, candida
 scores, promotions, and generated scoreboard/progress plots when present.
 
 `rlx dashboard` starts the connected local web app. It serves a browser UI at `/`
-and live JSON data from `/api/project`, `/api/run`, and `/api/research`, so the
-page can refresh after new training, eval, video, or research artifacts appear.
+and live JSON data from `/api/project`, `/api/run`, `/api/logs`, and
+`/api/research`, so the page can refresh after new training, eval, video, or
+research artifacts appear.
 
 ```bash
 rlx dashboard --demo

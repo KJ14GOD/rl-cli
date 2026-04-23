@@ -1,0 +1,30 @@
+# RLX research protocol.
+# This file keeps automated research bounded, comparable, and auditable.
+
+objective: maximize eval reward
+baseline: cartpole_ppo_001
+
+budget:
+  max_rounds: 10
+  max_variants_per_round: 4
+  max_timesteps_per_variant: 50000
+
+allowed_changes:
+  - algo.learning_rate
+  - algo.gamma
+  - algo.gae_lambda
+  - algo.clip_range
+  - algo.entropy_coef
+  - algo.update_epochs
+  - policy.hidden_sizes
+
+locked:
+  - env.id
+  - algo.total_timesteps
+  - eval.every
+  - eval.episodes
+  - eval.deterministic
+
+# Optional planner settings. Leave as rules for free local planning, or set
+# planner: llm and configure RLX_LLM_PROVIDER/RLX_LLM_MODEL in .env.
+planner: rules
