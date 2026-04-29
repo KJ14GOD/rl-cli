@@ -11,9 +11,12 @@ from PIL import Image
 
 from rlx.config import ConfigError, load_config
 from rlx.core.metadata import update_metadata
+from rlx.core.projects import ProjectLookupError, find_project_root
 from rlx.paths import CONFIG_SNAPSHOT_NAME, METADATA_NAME
 from rlx.rl.device import DeviceResolutionError, resolve_device
+from rlx.rl.envs import EnvironmentError, validate_environment
 from rlx.rl.ppo import _prepare_matplotlib_cache
+from rlx.rl.runtime import resolve_runtime
 
 
 class VideoRenderError(Exception):
@@ -73,14 +76,17 @@ def render_checkpoint_video(
 
     try:
         config = load_config(config_path)
+        project_root = find_project_root(run_dir)
+        runtime = resolve_runtime(config, project_root=project_root)
+        validate_environment(config, project_root=project_root, render_mode="rgb_array")
         resolved_device = resolve_device(device or config.device)
-    except (ConfigError, DeviceResolutionError) as exc:
+    except (ConfigError, DeviceResolutionError, EnvironmentError, ProjectLookupError) as exc:
         raise VideoRenderError(str(exc)) from exc
 
     env = None
     try:
         try:
-            env = gym.make(config.env.id, render_mode="rgb_array")
+            env = gym.make(runtime.env_id, render_mode="rgb_array")
         except Exception as exc:
             raise VideoRenderError(
                 f"Environment does not support rgb_array video rendering: {config.env.id}"

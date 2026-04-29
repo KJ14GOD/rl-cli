@@ -25,6 +25,17 @@ def test_load_config_accepts_all_classic_control_templates() -> None:
         assert config.policy.hidden_sizes == [128, 128]
 
 
+def test_load_config_accepts_custom_project_template() -> None:
+    config = load_config(Path("src/rlx/templates/project_custom/configs/custom_ppo.yaml"))
+
+    assert config.env.id == "RLXCustomCartPole-v0"
+    assert config.env.import_modules == ["envs.custom_env"]
+    assert config.policy.type == "custom"
+    assert config.policy.import_module == "policies.custom_policy"
+    assert config.policy.class_name == "CustomCartPolePolicy"
+    assert config.policy.hidden_sizes is None
+
+
 def test_load_config_rejects_missing_required_field(tmp_path: Path) -> None:
     config_path = tmp_path / "missing-field.yaml"
     config_path.write_text(
@@ -115,6 +126,56 @@ def test_load_config_rejects_wrong_type(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ConfigValidationError, match=r"seed: Input should be a valid integer"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_incomplete_custom_policy(tmp_path: Path) -> None:
+    config_path = tmp_path / "bad-custom-policy.yaml"
+    config_path.write_text(
+        dedent(
+            """
+            run_name: custom_test
+            seed: 42
+            device: cpu
+
+            env:
+              id: CartPole-v1
+              num_envs: 1
+
+            algo:
+              name: ppo
+              total_timesteps: 50000
+              rollout_steps: 128
+              batch_size: 256
+              learning_rate: 0.0003
+              gamma: 0.99
+              gae_lambda: 0.95
+              clip_range: 0.2
+              entropy_coef: 0.01
+              value_coef: 0.5
+              update_epochs: 4
+
+            policy:
+              type: custom
+              import_module: policies.custom_policy
+
+            checkpoint:
+              save_every: 10000
+
+            eval:
+              every: 10000
+              episodes: 10
+              deterministic: true
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ConfigValidationError,
+        match=r"policy: Value error, import_module and class_name are required",
+    ):
         load_config(config_path)
 
 

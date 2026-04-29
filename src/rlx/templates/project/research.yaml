@@ -3,6 +3,7 @@
 
 objective: maximize eval reward
 baseline: cartpole_ppo_001
+program: program.md
 
 budget:
   max_rounds: 10
@@ -27,4 +28,10 @@ locked:
 
 # Optional planner settings. Leave as rules for free local planning, or set
 # planner: llm and configure RLX_LLM_PROVIDER/RLX_LLM_MODEL in .env.
+# Optional bounded workspace scope for future code-aware planning:
+# workspace:
+#   editable_files:
+#     - policies/custom_policy.py
+#   locked_files:
+#     - envs/custom_env.py
 planner: rules

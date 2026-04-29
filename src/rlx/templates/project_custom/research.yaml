@@ -1,0 +1,34 @@
+# RLX research protocol for a custom project scaffold.
+
+objective: maximize eval reward
+baseline: custom_cartpole_ppo_001
+program: program.md
+
+budget:
+  max_rounds: 10
+  max_variants_per_round: 4
+  max_timesteps_per_variant: 50000
+
+allowed_changes:
+  - algo.learning_rate
+  - algo.gamma
+  - algo.gae_lambda
+  - algo.clip_range
+  - algo.entropy_coef
+  - algo.update_epochs
+  - policy.hidden_sizes
+
+locked:
+  - env.id
+  - algo.total_timesteps
+  - eval.every
+  - eval.episodes
+  - eval.deterministic
+
+workspace:
+  editable_files:
+    - policies/custom_policy.py
+  locked_files:
+    - envs/custom_env.py
+
+planner: rules

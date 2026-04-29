@@ -18,6 +18,12 @@ from rlx.core.advisor import (
 )
 from rlx.core.diagnose import DiagnoseError, diagnose_run
 from rlx.core.projects import ProjectLookupError, find_project_root
+from rlx.core.workspace import (
+    ResearchWorkspaceContext,
+    WorkspaceContextError,
+    resolve_workspace_context,
+    resolve_workspace_context_from_protocol,
+)
 from rlx.llm.env import get_env_value
 from rlx.llm.planner import LLM_ALLOWED_MUTATION_KEYS, LLM_DEFAULT_MODEL, LLM_DEFAULT_PROVIDER
 from rlx.paths import CONFIG_SNAPSHOT_NAME
@@ -119,6 +125,9 @@ class ResearchProtocolInput:
     llm_model: str | None
     llm_strict: bool | None
     min_improvement: float | None
+    program: str | None
+    editable_files: tuple[str, ...]
+    locked_files: tuple[str, ...]
 
 
 def run_research(
@@ -181,6 +190,10 @@ def run_research(
         project_root = find_project_root(initial_run.run_dir)
     except ProjectLookupError as exc:
         raise ResearchError(str(exc)) from exc
+    try:
+        workspace_context = _resolve_research_workspace(protocol_input, project_root=project_root)
+    except WorkspaceContextError as exc:
+        raise ResearchError(str(exc)) from exc
 
     resolved_llm_provider = _resolve_llm_setting(
         "RLX_LLM_PROVIDER",
@@ -234,6 +247,7 @@ def run_research(
     initial_score_source = champion_score_source
 
     protocol = _build_protocol(
+        project_root=project_root,
         budget_timesteps=budget_timesteps,
         budget_source=_budget_source(timesteps=timesteps, protocol=protocol_input),
         max_rounds=resolved_rounds,
@@ -247,6 +261,7 @@ def run_research(
         llm_model=resolved_llm_model if planner_name == "llm" else None,
         llm_strict=resolved_llm_strict,
         protocol_input=protocol_input,
+        workspace_context=workspace_context,
     )
 
     return _continue_research(
@@ -266,6 +281,7 @@ def run_research(
         min_improvement=resolved_min_improvement,
         protocol=protocol,
         locked_mutations=locked_mutations,
+        workspace_context=workspace_context,
         research_rounds=[],
         tried_signatures=set(),
     )
@@ -300,6 +316,11 @@ def _load_research_protocol(
         budget = {}
     if not isinstance(budget, dict):
         raise ResearchError("Research protocol budget must be a mapping.")
+    workspace = payload.get("workspace", {})
+    if workspace is None:
+        workspace = {}
+    if not isinstance(workspace, dict):
+        raise ResearchError("Research protocol workspace must be a mapping.")
 
     return ResearchProtocolInput(
         path=path,
@@ -331,6 +352,15 @@ def _load_research_protocol(
             payload.get("min_improvement"),
             field_name="min_improvement",
         ),
+        program=_optional_str(payload.get("program"), field_name="program"),
+        editable_files=_string_tuple(
+            workspace.get("editable_files"),
+            field_name="workspace.editable_files",
+        ),
+        locked_files=_string_tuple(
+            workspace.get("locked_files"),
+            field_name="workspace.locked_files",
+        ),
     )
 
 
@@ -348,6 +378,26 @@ def _resolve_baseline_ref(
             "Pass only --protocol, update research.yaml, or use the same baseline."
         )
     return run_ref
+
+
+def _resolve_research_workspace(
+    protocol: ResearchProtocolInput | None,
+    *,
+    project_root: Path,
+) -> ResearchWorkspaceContext:
+    if protocol is None:
+        return resolve_workspace_context(
+            project_root=project_root,
+            program_path=None,
+            editable_files=(),
+            locked_files=(),
+        )
+    return resolve_workspace_context(
+        project_root=project_root,
+        program_path=protocol.program,
+        editable_files=protocol.editable_files,
+        locked_files=protocol.locked_files,
+    )
 
 
 def _coerce_objective(value: Any) -> str:
@@ -582,6 +632,7 @@ def resume_research(
         min_improvement=improvement,
         protocol=protocol,
         locked_mutations=locked_mutations,
+        workspace_context=None,
         research_rounds=list(research_rounds),
         tried_signatures=tried_signatures,
     )
@@ -605,6 +656,7 @@ def _continue_research(
     min_improvement: float,
     protocol: dict[str, Any],
     locked_mutations: dict[str, Any],
+    workspace_context: ResearchWorkspaceContext | None,
     research_rounds: list[ResearchRound],
     tried_signatures: set[str],
 ) -> ResearchResult:
@@ -623,6 +675,16 @@ def _continue_research(
     llm_provider = _maybe_str(protocol.get("llm_provider")) or LLM_DEFAULT_PROVIDER
     llm_model = _maybe_str(protocol.get("llm_model")) or LLM_DEFAULT_MODEL
     llm_strict = bool(protocol.get("llm_strict", False))
+    if workspace_context is None:
+        try:
+            workspace_context = resolve_workspace_context_from_protocol(
+                project_root=project_root,
+                protocol=protocol,
+            )
+        except WorkspaceContextError as exc:
+            raise ResearchError(str(exc)) from exc
+    planner_context = workspace_context.planner_context(project_root=project_root)
+    workspace_summary = workspace_context.summary(project_root=project_root)
 
     for round_index in range(len(research_rounds) + 1, target_rounds + 1):
         try:
@@ -639,6 +701,8 @@ def _continue_research(
                 llm_provider=llm_provider,
                 llm_model=llm_model,
                 llm_strict=llm_strict,
+                planner_context=planner_context,
+                workspace_summary=workspace_summary,
                 cwd=project_root,
             )
         except AdvisorExhaustedError as exc:
@@ -881,6 +945,7 @@ def _record_tried_mutations(
 
 def _build_protocol(
     *,
+    project_root: Path,
     budget_timesteps: int,
     budget_source: str,
     max_rounds: int,
@@ -894,6 +959,7 @@ def _build_protocol(
     llm_model: str | None,
     llm_strict: bool,
     protocol_input: ResearchProtocolInput | None,
+    workspace_context: ResearchWorkspaceContext,
 ) -> dict[str, Any]:
     score_mode = EXECUTED_SCORE_MODE if require_eval_score else DRY_RUN_SCORE_MODE
     protocol = {
@@ -923,6 +989,7 @@ def _build_protocol(
         "locked_mutations": locked_mutations,
         "signature_ignored_keys": list(SIGNATURE_IGNORED_KEYS),
         "duplicate_guard": "exact mutation signatures are not repeated across rounds",
+        "workspace": workspace_context.summary(project_root=project_root),
     }
     if protocol_input is not None:
         protocol["source_protocol"] = str(protocol_input.path)

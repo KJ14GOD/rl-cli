@@ -34,10 +34,34 @@ def test_init_creates_project_scaffold() -> None:
         assert protocol.exists()
         protocol_text = protocol.read_text(encoding="utf-8")
         assert "objective: maximize eval reward" in protocol_text
+        assert "program: program.md" in protocol_text
         assert "allowed_changes:" in protocol_text
         assert "locked:" in protocol_text
+        assert (project_root / "program.md").exists()
         assert "cp .env.example .env" in result.stdout
         assert "research.yaml" in result.stdout
+        assert "program.md" in result.stdout
 
         for filename in catalog_config_names():
             assert (project_root / "configs" / filename).exists()
+
+
+def test_init_custom_template_scaffolds_editable_project_code() -> None:
+    with runner.isolated_filesystem():
+        result = runner.invoke(app, ["init", "bossfight", "--template", "custom"])
+
+        assert result.exit_code == 0
+
+        project_root = Path("bossfight")
+        assert (project_root / "configs/custom_ppo.yaml").exists()
+        assert (project_root / "envs/__init__.py").exists()
+        assert (project_root / "envs/custom_env.py").exists()
+        assert (project_root / "policies/__init__.py").exists()
+        assert (project_root / "policies/custom_policy.py").exists()
+        assert (project_root / "program.md").exists()
+        research_text = (project_root / "research.yaml").read_text(encoding="utf-8")
+        assert "baseline: custom_cartpole_ppo_001" in research_text
+        assert "editable_files:" in research_text
+        assert "policies/custom_policy.py" in research_text
+        assert "custom" in result.stdout
+        assert "configs/custom_ppo.yaml" in result.stdout

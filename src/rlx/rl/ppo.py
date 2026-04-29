@@ -14,6 +14,7 @@ from rlx.core.metrics import JsonlMetricsWriter
 from rlx.core.runs import RunPreparationResult
 from rlx.rl.device import DeviceResolutionError, resolve_device
 from rlx.rl.envs import EnvironmentError, validate_environment
+from rlx.rl.runtime import resolve_runtime
 
 
 class TrainingError(Exception):
@@ -60,7 +61,8 @@ def train_ppo(
         ) from exc
 
     try:
-        validate_environment(config)
+        runtime = resolve_runtime(config, project_root=run.project_root)
+        validate_environment(config, project_root=run.project_root)
         resolved_device = resolve_device(config.device)
     except (EnvironmentError, DeviceResolutionError) as exc:
         raise TrainingError(str(exc)) from exc
@@ -137,13 +139,17 @@ def train_ppo(
     metrics_callback: MetricsCallback | None = None
     learn_timesteps = additional_timesteps or config.algo.total_timesteps
     try:
-        env = make_vec_env(config.env.id, n_envs=config.env.num_envs, seed=config.seed)
-        eval_env = make_vec_env(config.env.id, n_envs=1, seed=config.seed + 10_000)
+        env = make_vec_env(runtime.env_id, n_envs=config.env.num_envs, seed=config.seed)
+        eval_env = make_vec_env(runtime.env_id, n_envs=1, seed=config.seed + 10_000)
 
         if resume_checkpoint is None:
-            policy_kwargs = {"net_arch": list(config.policy.hidden_sizes)}
+            policy_kwargs = (
+                {"net_arch": list(config.policy.hidden_sizes)}
+                if config.policy.hidden_sizes is not None
+                else None
+            )
             model = PPO(
-                "MlpPolicy",
+                runtime.policy_spec,
                 env,
                 n_steps=config.algo.rollout_steps,
                 batch_size=config.algo.batch_size,

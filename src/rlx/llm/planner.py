@@ -97,6 +97,7 @@ def generate_llm_plan(
     excluded_mutation_signatures: set[str],
     signature_ignored_keys: tuple[str, ...],
     variants: int,
+    additional_context: dict[str, Any] | None = None,
 ) -> LLMPlannerResult:
     context = _build_context(
         base_payload=base_payload,
@@ -106,6 +107,7 @@ def generate_llm_plan(
         excluded_mutation_signatures=excluded_mutation_signatures,
         signature_ignored_keys=signature_ignored_keys,
         variants=variants,
+        additional_context=additional_context,
     )
     payload = _call_provider(
         provider=provider,
@@ -136,6 +138,7 @@ def generate_llm_repair_plan(
     accepted_mutations: list[dict[str, Any]],
     rejected_proposals: list[dict[str, Any]],
     attempt: int,
+    additional_context: dict[str, Any] | None = None,
 ) -> LLMPlannerResult:
     context = _build_context(
         base_payload=base_payload,
@@ -145,6 +148,7 @@ def generate_llm_repair_plan(
         excluded_mutation_signatures=excluded_mutation_signatures,
         signature_ignored_keys=signature_ignored_keys,
         variants=variants,
+        additional_context=additional_context,
     )
     context["task"] = "Repair PPO YAML config mutations for RLX advisor variants."
     context["repair"] = {
@@ -530,12 +534,13 @@ def _build_context(
     excluded_mutation_signatures: set[str],
     signature_ignored_keys: tuple[str, ...],
     variants: int,
+    additional_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
     analysis = diagnosis.analysis
     info = analysis.info
     run = info.run
     learning = analysis.learning
-    return {
+    context = {
         "task": "Propose PPO YAML config mutations for the next RLX advisor variants.",
         "requested_variants": variants,
         "constraints": {
@@ -630,6 +635,9 @@ def _build_context(
             for item in diagnosis.metrics.notes
         ],
     }
+    if additional_context:
+        context.update(additional_context)
+    return context
 
 
 def _system_prompt() -> str:

@@ -9,10 +9,12 @@ from statistics import mean, median, pstdev
 
 from rlx.config import ConfigError, load_config
 from rlx.core.metadata import update_metadata
+from rlx.core.projects import ProjectLookupError, find_project_root
 from rlx.paths import CONFIG_SNAPSHOT_NAME, METADATA_NAME
 from rlx.rl.device import DeviceResolutionError, resolve_device
 from rlx.rl.envs import EnvironmentError, validate_environment
 from rlx.rl.ppo import _prepare_matplotlib_cache
+from rlx.rl.runtime import resolve_runtime
 
 
 class EvaluationError(Exception):
@@ -133,9 +135,11 @@ def evaluate_checkpoint(
 
     try:
         config = load_config(config_path)
-        validate_environment(config)
+        project_root = find_project_root(run_dir)
+        runtime = resolve_runtime(config, project_root=project_root)
+        validate_environment(config, project_root=project_root)
         resolved_device = resolve_device(device or config.device)
-    except (ConfigError, EnvironmentError, DeviceResolutionError) as exc:
+    except (ConfigError, EnvironmentError, DeviceResolutionError, ProjectLookupError) as exc:
         raise EvaluationError(str(exc)) from exc
 
     eval_episodes = episodes or config.eval.episodes
@@ -145,7 +149,7 @@ def evaluate_checkpoint(
 
     env = None
     try:
-        env = make_vec_env(config.env.id, n_envs=1, seed=config.seed + 20_000)
+        env = make_vec_env(runtime.env_id, n_envs=1, seed=config.seed + 20_000)
         model = PPO.load(str(resolved_checkpoint_path), device=resolved_device)
 
         rewards, lengths = evaluate_policy(

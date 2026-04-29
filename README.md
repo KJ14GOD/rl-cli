@@ -60,6 +60,14 @@ rlx init bossfight
 cd bossfight
 ```
 
+Create a project with editable custom env/policy code:
+
+```bash
+rlx init lab --template custom
+cd lab
+rlx train configs/custom_ppo.yaml
+```
+
 See bundled starter environments:
 
 ```bash
@@ -119,6 +127,17 @@ rlx research cartpole_ppo_001 --rounds 3 --variants 4
 rlx research --protocol research.yaml
 ```
 
+Project scaffolds also include:
+
+```bash
+program.md
+research.yaml
+```
+
+`program.md` is the project-level research brief. `research.yaml` is the hard
+protocol for baseline, budget, allowed changes, locked fields, and optional
+workspace scope.
+
 Train advisor/research variants:
 
 ```bash
@@ -152,9 +171,29 @@ bossfight/
   videos/
 ```
 
+`rlx init lab --template custom` adds:
+
+```text
+lab/
+  configs/
+    custom_ppo.yaml
+  envs/
+    __init__.py
+    custom_env.py
+  policies/
+    __init__.py
+    custom_policy.py
+```
+
 The YAML config is the main editable entrypoint. You can change values such as
 `seed`, `device`, `env.id`, `env.num_envs`, `algo.total_timesteps`,
 `algo.learning_rate`, `algo.rollout_steps`, `checkpoint.save_every`, and eval cadence.
+
+Custom runtime loading is also supported:
+
+- `env.import_modules`: project-local modules to import before `gym.make(env.id)`.
+- `policy.type: custom`: switch from built-in `MlpPolicy` to a project-local PPO policy class.
+- `policy.import_module` and `policy.class_name`: the module/class RLX imports before train, eval, and video.
 
 Starter configs:
 
@@ -170,6 +209,25 @@ rlx train configs/ppo_taxi.yaml
 
 Classic Control configs are the strongest PPO starters. FrozenLake and Taxi are included as
 simple Toy Text examples, but they are not necessarily PPO-optimal tasks.
+
+Example custom config:
+
+```yaml
+env:
+  id: RLXCustomCartPole-v0
+  num_envs: 4
+  import_modules:
+    - envs.custom_env
+
+policy:
+  type: custom
+  import_module: policies.custom_policy
+  class_name: CustomCartPolePolicy
+```
+
+This keeps one Gymnasium path: RLX imports your env module so it can register the env,
+then uses `gym.make(env.id)` everywhere. Custom policies are imported from project code
+before PPO train/load/eval/video flows.
 
 ## Run Storage
 
@@ -375,6 +433,7 @@ Example:
 ```yaml
 objective: maximize eval reward
 baseline: cartpole_ppo_001
+program: program.md
 
 budget:
   max_rounds: 10
@@ -396,10 +455,29 @@ locked:
   - eval.every
   - eval.episodes
   - eval.deterministic
+
+# Optional scoped project context for LLM planning.
+workspace:
+  editable_files:
+    - policies/custom_policy.py
+  locked_files:
+    - envs/custom_env.py
 ```
 
 CLI flags can still override protocol budget values when you need a quick test, but
 the saved research manifest always records the effective protocol.
+
+`program.md` and `workspace` are used to ground LLM planning on bounded project context:
+
+- `program.md` gives the high-level research objective and constraints.
+- `workspace.editable_files` lists project files that are in scope for future code-aware research.
+- `workspace.locked_files` lists project files the planner should treat as off-limits.
+
+Current behavior:
+
+- RLX records this scoped project context in the research/advisor protocol artifacts.
+- LLM planning sees the bounded `program.md` and file excerpts as extra context.
+- RLX does not autonomously edit project Python files yet. Current advisor/research execution is still YAML-mutation based.
 
 Outputs:
 
@@ -605,9 +683,9 @@ Difference from research:
 ## Limitations
 
 - PPO is the only implemented algorithm.
-- Project-code editing is not implemented yet. Current advisor/research mutations are YAML-only.
-- Custom envs must be Gymnasium-compatible and registered before training starts.
-- Custom policy loading from scaffolded project code is planned but not public-release ready.
+- Project-code editing is not implemented yet. Current advisor/research mutations are YAML-only, even when `program.md` and workspace scope are present.
+- Custom envs must still be Gymnasium-compatible.
+- Research does not mutate project Python code yet; it only mutates YAML fields.
 - Video output is GIF bundles, not mp4.
 - LLM planner quality depends on the provider/model. Local Ollama models can be slower or weaker than hosted models.
 

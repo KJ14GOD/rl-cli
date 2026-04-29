@@ -97,6 +97,8 @@ def run_advisor(
     llm_provider: str | None = None,
     llm_model: str | None = None,
     llm_strict: bool = False,
+    planner_context: dict[str, Any] | None = None,
+    workspace_summary: dict[str, Any] | None = None,
     cwd: Path | None = None,
 ) -> AdvisorResult:
     if variants < 1:
@@ -163,6 +165,7 @@ def run_advisor(
         llm_provider=resolved_llm_provider,
         llm_model=resolved_llm_model,
         llm_strict=llm_strict,
+        planner_context=planner_context,
     )
     if not proposals:
         _write_exhausted_manifest(
@@ -183,6 +186,7 @@ def run_advisor(
             llm_strict=llm_strict,
             fallback=fallback,
             planner_audit=planner_audit,
+            workspace_summary=workspace_summary,
         )
         raise AdvisorExhaustedError(
             f"Advisor proposal space exhausted for {baseline_run.run_id}. "
@@ -258,6 +262,7 @@ def run_advisor(
         llm_strict=llm_strict,
         fallback=fallback,
         planner_audit=planner_audit,
+        workspace_summary=workspace_summary,
     )
     _write_plan(
         plan_path=plan_path,
@@ -313,6 +318,7 @@ def _select_planner_proposals(
     llm_provider: str,
     llm_model: str,
     llm_strict: bool,
+    planner_context: dict[str, Any] | None,
 ) -> tuple[list[AdvisorProposal], dict[str, Any], dict[str, Any]]:
     fallback = {
         "used": False,
@@ -357,6 +363,7 @@ def _select_planner_proposals(
             excluded_mutation_signatures=excluded_mutation_signatures,
             signature_ignored_keys=signature_ignored_keys,
             variants=variants,
+            additional_context=planner_context,
         )
     except LLMPlannerError as exc:
         raise AdvisorError(str(exc)) from exc
@@ -418,6 +425,7 @@ def _select_planner_proposals(
         allowed_mutation_keys=allowed_mutation_keys or LLM_ALLOWED_MUTATION_KEYS,
         excluded_mutation_signatures=excluded_mutation_signatures,
         signature_ignored_keys=signature_ignored_keys,
+        additional_context=planner_context,
     )
     fallback["llm_valid"] = len(selected)
     audit["llm_selected_count"] = len(selected)
@@ -501,6 +509,7 @@ def _repair_llm_proposals(
     allowed_mutation_keys: tuple[str, ...],
     excluded_mutation_signatures: set[str],
     signature_ignored_keys: tuple[str, ...],
+    additional_context: dict[str, Any] | None,
 ) -> list[AdvisorProposal]:
     repaired = list(selected)
     for attempt in range(1, LLM_REPAIR_ATTEMPTS + 1):
@@ -528,6 +537,7 @@ def _repair_llm_proposals(
                 accepted_mutations=[item.mutations for item in repaired],
                 rejected_proposals=_repair_rejection_summary(audit),
                 attempt=attempt,
+                additional_context=additional_context,
             )
         except LLMPlannerError:
             break
@@ -1093,6 +1103,7 @@ def _write_manifest(
     llm_strict: bool,
     fallback: dict[str, Any],
     planner_audit: dict[str, Any],
+    workspace_summary: dict[str, Any] | None,
 ) -> None:
     payload = {
         "kind": "advisor_bundle",
@@ -1121,6 +1132,7 @@ def _write_manifest(
             else None,
             "excluded_mutation_signatures": sorted(excluded_mutation_signatures),
             "require_eval_score": require_eval_score,
+            "workspace": workspace_summary,
         },
         "diagnostics": [
             {
@@ -1186,6 +1198,7 @@ def _write_exhausted_manifest(
     llm_strict: bool,
     fallback: dict[str, Any],
     planner_audit: dict[str, Any],
+    workspace_summary: dict[str, Any] | None,
 ) -> None:
     payload = {
         "kind": "advisor_bundle",
@@ -1212,6 +1225,7 @@ def _write_exhausted_manifest(
             else None,
             "excluded_mutation_signatures": sorted(excluded_mutation_signatures),
             "require_eval_score": require_eval_score,
+            "workspace": workspace_summary,
         },
         "variants": [],
         "best_variant": None,

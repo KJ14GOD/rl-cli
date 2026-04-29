@@ -70,15 +70,19 @@ def test_research_dry_run_creates_research_journal() -> None:
 
 def test_research_protocol_controls_budget_and_mutation_keys() -> None:
     with runner.isolated_filesystem():
-        init_result = runner.invoke(app, ["init", "bossfight"])
+        init_result = runner.invoke(app, ["init", "bossfight", "--template", "custom"])
         assert init_result.exit_code == 0
 
-        _write_fake_run(Path("bossfight/runs/tiny_research_001"))
+        _write_fake_run(
+            Path("bossfight/runs/tiny_research_001"),
+            env_id="RLXCustomCartPole-v0",
+        )
         Path("bossfight/research.yaml").write_text(
             dedent(
                 """
                 objective: maximize eval reward
                 baseline: tiny_research_001
+                program: program.md
 
                 budget:
                   max_rounds: 1
@@ -92,6 +96,12 @@ def test_research_protocol_controls_budget_and_mutation_keys() -> None:
                   - env.id
                   - algo.total_timesteps
                   - eval.episodes
+
+                workspace:
+                  editable_files:
+                    - policies/custom_policy.py
+                  locked_files:
+                    - envs/custom_env.py
                 """
             ).strip()
             + "\n",
@@ -109,8 +119,11 @@ def test_research_protocol_controls_budget_and_mutation_keys() -> None:
         assert protocol["budget"]["max_variants_per_round"] == 1
         assert protocol["budget"]["timesteps_per_variant"] == 128
         assert protocol["allowed_mutation_keys"] == ["algo.learning_rate"]
-        assert protocol["locked_mutations"]["env.id"] == "CartPole-v1"
+        assert protocol["locked_mutations"]["env.id"] == "RLXCustomCartPole-v0"
         assert protocol["locked_mutations"]["algo.total_timesteps"] == 128
+        assert protocol["workspace"]["program"]["path"] == "program.md"
+        assert protocol["workspace"]["editable_files"][0]["path"] == "policies/custom_policy.py"
+        assert protocol["workspace"]["locked_files"] == ["envs/custom_env.py"]
         assert result.rounds[0].variants[0].mutations["algo.total_timesteps"] == 128
 
 
@@ -186,20 +199,20 @@ def test_research_stops_cleanly_when_proposal_space_is_exhausted() -> None:
         assert exhausted_manifests[-1]["variants"] == []
 
 
-def _write_fake_run(run_dir: Path) -> None:
+def _write_fake_run(run_dir: Path, *, env_id: str = "CartPole-v1") -> None:
     run_dir.mkdir(parents=True)
     for dirname in ("checkpoints", "eval", "videos", "plots", "logs"):
         (run_dir / dirname).mkdir()
 
     (run_dir / "config_snapshot.yaml").write_text(
         dedent(
-            """
+            f"""
             run_name: tiny_research
             seed: 7
             device: cpu
 
             env:
-              id: CartPole-v1
+              id: {env_id}
               num_envs: 1
 
             algo:
@@ -236,7 +249,7 @@ def _write_fake_run(run_dir: Path) -> None:
         "run_id": run_dir.name,
         "run_name": "tiny_research",
         "status": "completed",
-        "environment": "CartPole-v1",
+        "environment": env_id,
         "device": "cpu",
         "resolved_device": "cpu",
         "total_timesteps": 256,

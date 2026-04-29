@@ -48,8 +48,11 @@ rlx = "rlx.cli:app"
 packages = ["src/rlx"]
 include = [
   "src/rlx/templates/**/*.yaml",
+  "src/rlx/templates/**/*.md",
   "src/rlx/templates/project/.env.example",
   "src/rlx/templates/project/.gitignore",
+  "src/rlx/templates/project_custom/**/*.py",
+  "src/rlx/templates/project_custom/**/*.yaml",
 ]
 
 [tool.pytest.ini_options]

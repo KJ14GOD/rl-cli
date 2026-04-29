@@ -1,8 +1,9 @@
 from dataclasses import dataclass
+from enum import Enum
 from importlib.resources import files
 from pathlib import Path
 
-from rlx.paths import PROJECT_DIRS, STARTER_CONFIG
+from rlx.paths import CUSTOM_STARTER_CONFIG, PROJECT_DIRS, STARTER_CONFIG
 
 
 class ProjectInitError(Exception):
@@ -13,15 +14,25 @@ class ProjectLookupError(Exception):
     """Raised when an RLCLI project root cannot be located."""
 
 
+class ProjectTemplate(str, Enum):
+    starter = "starter"
+    custom = "custom"
+
+
 @dataclass(frozen=True)
 class ProjectInitResult:
     project_root: Path
     created_dirs: tuple[Path, ...]
     starter_config: Path
     created_files: tuple[Path, ...]
+    template: ProjectTemplate
 
 
-def init_project(project_root: Path) -> ProjectInitResult:
+def init_project(
+    project_root: Path,
+    *,
+    template: ProjectTemplate = ProjectTemplate.starter,
+) -> ProjectInitResult:
     """Create the standard RLCLI project layout in a new directory."""
 
     destination = project_root.resolve()
@@ -36,14 +47,18 @@ def init_project(project_root: Path) -> ProjectInitResult:
         path.mkdir()
         created_dirs.append(path)
 
-    created_files = _copy_project_template(destination)
+    created_files = _copy_template_tree("project", destination)
     starter_config = destination / STARTER_CONFIG
+    if template is ProjectTemplate.custom:
+        created_files.extend(_copy_template_tree("project_custom", destination))
+        starter_config = destination / CUSTOM_STARTER_CONFIG
 
     return ProjectInitResult(
         project_root=destination,
         created_dirs=tuple(created_dirs),
         starter_config=starter_config,
         created_files=tuple(created_files),
+        template=template,
     )
 
 
@@ -64,8 +79,8 @@ def find_project_root(path: Path) -> Path:
     )
 
 
-def _copy_project_template(destination: Path) -> list[Path]:
-    template_root = files("rlx.templates").joinpath("project")
+def _copy_template_tree(template_name: str, destination: Path) -> list[Path]:
+    template_root = files("rlx.templates").joinpath(template_name)
     created_files: list[Path] = []
 
     def visit(source, relative: Path) -> None:

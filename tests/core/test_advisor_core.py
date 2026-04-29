@@ -329,6 +329,109 @@ def test_advisor_ollama_provider_uses_local_chat_api(monkeypatch) -> None:
         assert manifest["variants"][0]["proposal_source"] == "llm"
 
 
+def test_advisor_includes_workspace_context_in_llm_and_manifest(monkeypatch) -> None:
+    with runner.isolated_filesystem():
+        init_result = runner.invoke(app, ["init", "bossfight"])
+        assert init_result.exit_code == 0
+
+        run_dir = Path("bossfight/runs/tiny_advisor_001")
+        _write_fake_run(
+            run_dir=run_dir,
+            run_name="tiny_advisor",
+            rewards=(25.0, 26.0, 26.5),
+        )
+        calls = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps(
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps(
+                                {
+                                    "proposals": [
+                                        {
+                                            "changes": [
+                                                {
+                                                    "key": "algo.learning_rate",
+                                                    "value": 0.0002,
+                                                }
+                                            ],
+                                            "signal": "workspace grounded",
+                                            "rationale": "Use the scoped research context.",
+                                            "priority": "high",
+                                        }
+                                    ]
+                                }
+                            ),
+                        },
+                        "done": True,
+                    }
+                ).encode("utf-8")
+
+        def fake_urlopen(request, timeout):
+            calls.append((request, timeout))
+            return FakeResponse()
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+        result = run_advisor(
+            "tiny_advisor_001",
+            variants=1,
+            planner="llm",
+            llm_provider="ollama",
+            llm_model="qwen3:8b",
+            planner_context={
+                "research_program": {"path": "program.md", "text": "maximize reward"},
+                "workspace_scope": {
+                    "editable_files": [
+                        {
+                            "path": "policies/custom_policy.py",
+                            "sha256": "abc",
+                            "text": "class X: ...",
+                        }
+                    ],
+                    "locked_files": ["envs/custom_env.py"],
+                },
+            },
+            workspace_summary={
+                "program": {
+                    "path": "program.md",
+                    "sha256": "abc",
+                    "chars": 32,
+                    "excerpt_chars": 32,
+                },
+                "editable_files": [
+                    {
+                        "path": "policies/custom_policy.py",
+                        "sha256": "def",
+                        "chars": 128,
+                        "excerpt_chars": 128,
+                    }
+                ],
+                "locked_files": ["envs/custom_env.py"],
+            },
+            cwd=Path("bossfight"),
+        )
+
+        payload = json.loads(calls[0][0].data.decode("utf-8"))
+        assert "research_program" in payload["messages"][1]["content"]
+        assert "policies/custom_policy.py" in payload["messages"][1]["content"]
+
+        manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+        workspace = manifest["protocol"]["workspace"]
+        assert workspace["program"]["path"] == "program.md"
+        assert workspace["editable_files"][0]["path"] == "policies/custom_policy.py"
+        assert workspace["locked_files"] == ["envs/custom_env.py"]
+
+
 def test_advisor_llm_strict_fails_when_variants_are_missing(monkeypatch) -> None:
     with runner.isolated_filesystem():
         init_result = runner.invoke(app, ["init", "bossfight"])

@@ -6,6 +6,7 @@ from pydantic import (
     Field,
     StringConstraints,
     field_validator,
+    model_validator,
 )
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -23,6 +24,12 @@ class RLXModel(BaseModel):
 class EnvConfig(RLXModel):
     id: NonEmptyStr
     num_envs: PositiveInt
+    import_modules: list[NonEmptyStr] = Field(default_factory=list)
+
+    @field_validator("import_modules")
+    @classmethod
+    def validate_import_modules(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(value))
 
 
 class AlgoConfig(RLXModel):
@@ -40,15 +47,38 @@ class AlgoConfig(RLXModel):
 
 
 class PolicyConfig(RLXModel):
-    type: Literal["mlp"]
-    hidden_sizes: list[PositiveInt] = Field(min_length=1)
+    type: Literal["mlp", "custom"]
+    hidden_sizes: list[PositiveInt] | None = None
+    import_module: NonEmptyStr | None = None
+    class_name: NonEmptyStr | None = None
 
     @field_validator("hidden_sizes")
     @classmethod
-    def validate_hidden_sizes(cls, value: list[int]) -> list[int]:
+    def validate_hidden_sizes(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
         if not value:
             raise ValueError("must contain at least one layer size")
         return value
+
+    @model_validator(mode="after")
+    def validate_policy_shape(self) -> "PolicyConfig":
+        if self.type == "mlp":
+            if not self.hidden_sizes:
+                raise ValueError("hidden_sizes is required when policy.type is 'mlp'")
+            if self.import_module is not None or self.class_name is not None:
+                raise ValueError(
+                    "import_module and class_name are only supported when policy.type is 'custom'"
+                )
+            return self
+
+        if self.import_module is None or self.class_name is None:
+            raise ValueError(
+                "import_module and class_name are required when policy.type is 'custom'"
+            )
+        if self.hidden_sizes is not None:
+            raise ValueError("hidden_sizes is only supported when policy.type is 'mlp'")
+        return self
 
 
 class CheckpointConfig(RLXModel):

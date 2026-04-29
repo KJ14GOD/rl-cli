@@ -12,7 +12,9 @@ PROJECT_DIRS = (
 )
 
 STARTER_CONFIG = Path("configs/ppo_cartpole.yaml")
+CUSTOM_STARTER_CONFIG = Path("configs/custom_ppo.yaml")
 RESEARCH_PROTOCOL = Path("research.yaml")
+PROGRAM_DOC = Path("program.md")
 RUNS_DIR = Path("runs")
 RUN_ARTIFACT_DIRS = (
     "checkpoints",
